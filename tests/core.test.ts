@@ -256,8 +256,9 @@ test("chat: @team asks for a split job", () => {
 
 test("chat: build tasks given to text-only models are moved to a file-writing worker", () => {
   const d = (title: string, agent: "gpt-oss" | "qwen" | "chatgpt") => ({ title, agent, why: "", prompt: "" });
-  const fixed = fixWriters([d("Final integration and review", "gpt-oss"), d("Write the README text", "qwen"),
-    d("Implement CSV export", "chatgpt")], ["qwen", "gpt-oss", "qwen-coder", "chatgpt"]);
-  assert.deepEqual(fixed.map((t) => t.agent), ["qwen-coder", "qwen", "qwen-coder"]);
+  const fixed = fixWriters([d("Build the main page", "gpt-oss"), d("Write the README text", "qwen"),
+    d("Implement CSV export", "chatgpt"), d("Final review and integration", "qwen")], ["qwen", "gpt-oss", "qwen-coder", "chatgpt"]);
+  assert.deepEqual(fixed.map((t) => t.agent), ["qwen-coder", "qwen", "qwen-coder", "qwen"],
+    "a text review/merge stays with a text model");
   assert.deepEqual(fixWriters([d("Build it", "qwen")], ["qwen"]).map((t) => t.agent), ["qwen"], "no writer available: unchanged");
 });

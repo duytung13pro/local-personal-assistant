@@ -44,6 +44,8 @@ Choosing workers (the lead chef cooks, apprentices prep):
   produce text (specs, designs, content, checklists, reviews) that later tasks can use through "deps".
 - Prefer ONE file-writing lead for the main build (several writers editing the same files conflict); put the text
   prep in parallel before it and a review after it.
+- Do NOT add a final "combine", "merge" or "integrate the results" task: you merge all results into one answer
+  yourself at the end. A final review task is fine when something was built.
 
 Workers available now:
 ${teamList(available)}
@@ -95,7 +97,7 @@ export function parseRoute(text: string, available: WorkerId[]): Route | null {
   return null;
 }
 
-const BUILDS = /\b(build|implement|integrat\w*|cod(e|ing)|fix|refactor|write (the )?(code|files?|page|html|script)|create (the |a )?(page|files?|app|script|component))\b/i;
+const BUILDS = /\b(build|implement|cod(e|ing)|fix (the )?(bug|code|page|script)|refactor|write (the )?(code|files?|page|html|script)|create (the |a )?(page|files?|app|script|component))\b/i;
 
 /** A task that builds or edits files must go to a worker that can write files; move it if the head chef slipped. */
 export function fixWriters(tasks: Draft[], available: WorkerId[]): Draft[] {
