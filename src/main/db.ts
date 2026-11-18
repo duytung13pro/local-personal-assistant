@@ -3,8 +3,9 @@
 import { DatabaseSync } from "node:sqlite";
 import { randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
-import type { CalEvent, ImportResult, Priority, Project, Step, StepStatus, Task, Job, UndoEntry, WorkerId } from "../shared/types";
-import { isWorker } from "../shared/workers";
+import type { CalEvent, ChatMessage, ChatMode, ChatStatus, ImportResult, Priority, Project, Step, StepStatus, Task, Job, UndoEntry,
+  WorkerId } from "../shared/types";
+import { CLOUD, isWorker } from "../shared/workers";
 import { isValidDate, isValidTime, minutes } from "../shared/dates";
 
 export class ValidationError extends Error {}
@@ -37,6 +38,12 @@ CREATE TABLE IF NOT EXISTS jobs(
   id TEXT PRIMARY KEY, project_id TEXT NOT NULL DEFAULT '', step_id TEXT NOT NULL DEFAULT '', agent TEXT NOT NULL,
   title TEXT NOT NULL, status TEXT NOT NULL, output TEXT NOT NULL DEFAULT '', error TEXT NOT NULL DEFAULT '',
   started TEXT NOT NULL, finished TEXT NOT NULL DEFAULT '');
+CREATE TABLE IF NOT EXISTS chat(
+  id TEXT PRIMARY KEY, project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE, role TEXT NOT NULL,
+  author TEXT NOT NULL, content TEXT NOT NULL DEFAULT '', private INTEGER NOT NULL DEFAULT 0,
+  status TEXT NOT NULL DEFAULT 'done', mode TEXT NOT NULL DEFAULT '', reason TEXT NOT NULL DEFAULT '',
+  reply_to TEXT NOT NULL DEFAULT '', created TEXT NOT NULL, updated TEXT NOT NULL);
+CREATE INDEX IF NOT EXISTS chat_project ON chat(project_id, created);
 INSERT OR IGNORE INTO meta(key, value) VALUES ('schema_version', '1');
 `;
 
@@ -61,7 +68,13 @@ const toProject = (r: Row): Project => ({
 const toStep = (r: Row): Step => ({
   id: String(r.id), projectId: String(r.project_id), idx: Number(r.idx), title: String(r.title),
   agent: r.agent as WorkerId, why: String(r.why), prompt: String(r.prompt), status: r.status as StepStatus,
-  deps: JSON.parse(String(r.deps ?? "[]")) as string[], output: String(r.output), updated: String(r.updated),
+  deps: JSON.parse(String(r.deps ?? "[]")) as string[], chatMsg: String(r.chat_msg ?? ""), output: String(r.output),
+  updated: String(r.updated),
+});
+const toChat = (r: Row): ChatMessage => ({
+  id: String(r.id), projectId: String(r.project_id), role: r.role as ChatMessage["role"], author: String(r.author),
+  content: String(r.content), private: Number(r.private) === 1, status: r.status as ChatStatus, mode: String(r.mode) as ChatMode | "",
+  reason: String(r.reason), replyTo: String(r.reply_to), created: String(r.created),
 });
 const toJob = (r: Row): Job => ({
   id: String(r.id), projectId: String(r.project_id), stepId: String(r.step_id), agent: r.agent as WorkerId,
@@ -103,6 +116,7 @@ export class Store {
     this.db.exec(SCHEMA);
     const cols = (this.db.prepare("PRAGMA table_info(steps)").all() as Row[]).map((c) => String(c.name));
     if (!cols.includes("deps")) this.db.exec("ALTER TABLE steps ADD COLUMN deps TEXT NOT NULL DEFAULT '[]'");
+    if (!cols.includes("chat_msg")) this.db.exec("ALTER TABLE steps ADD COLUMN chat_msg TEXT NOT NULL DEFAULT ''");
   }
 
   close() {
@@ -298,9 +312,9 @@ export class Store {
   /** Replace unfinished steps (or append, when `append`) with drafts. Draft `ref`/`deps` are local names
    * like "t1"; they are mapped to step ids. Unknown or forward-only references are dropped. */
   replaceSteps(projectId: string, drafts: { ref?: string; title: string; agent: WorkerId; why: string; prompt: string; deps?: string[] }[],
-    append = false): Step[] {
+    append = false, chatMsg = ""): Step[] {
     this.tx(() => {
-      if (!append) this.run("DELETE FROM steps WHERE project_id=? AND status NOT IN ('done','running')", projectId);
+      if (!append) this.run("DELETE FROM steps WHERE project_id=? AND chat_msg='' AND status NOT IN ('done','running')", projectId);
       const base = Number(this.get("SELECT COALESCE(MAX(idx),-1) AS m FROM steps WHERE project_id=?", projectId)!.m) + 1;
       const ids = new Map<string, string>();
       drafts.forEach((d, i) => {
@@ -308,9 +322,9 @@ export class Store {
         const id = randomUUID();
         const deps = (d.deps ?? []).map((r) => ids.get(r)).filter((x): x is string => !!x);
         if (d.ref) ids.set(d.ref, id);
-        this.run("INSERT INTO steps(id,project_id,idx,title,agent,why,prompt,status,output,updated,deps) VALUES(?,?,?,?,?,?,?,'todo','',?,?)",
-          id, projectId, base + i, cleanTitle(d.title, 160), d.agent, d.why.slice(0, 400), d.prompt.slice(0, 8000), now(),
-          JSON.stringify(deps));
+        this.run("INSERT INTO steps(id,project_id,idx,title,agent,why,prompt,status,output,updated,deps,chat_msg) VALUES(?,?,?,?,?,?,?,'todo','',?,?,?)",
+          id, projectId, base + i, cleanTitle(d.title, 160), d.agent, d.why.slice(0, 400), d.prompt.slice(0, 12000), now(),
+          JSON.stringify(deps), chatMsg);
       });
     });
     return this.listSteps(projectId);
@@ -325,11 +339,14 @@ export class Store {
   }
   /** Queue every unfinished step of a project (failed ones are retried). Returns how many were queued. */
   queueAll(projectId: string): number {
-    return Number(this.run("UPDATE steps SET status='queued', updated=? WHERE project_id=? AND status IN ('todo','failed')",
+    return Number(this.run("UPDATE steps SET status='queued', updated=? WHERE project_id=? AND chat_msg='' AND status IN ('todo','failed')",
       now(), projectId).changes);
   }
   unqueue(projectId: string) {
     this.run("UPDATE steps SET status='todo', updated=? WHERE project_id=? AND status='queued'", now(), projectId);
+  }
+  stepsOfChat(messageId: string): Step[] {
+    return this.all("SELECT * FROM steps WHERE chat_msg=? ORDER BY idx", messageId).map(toStep);
   }
   queuedSteps(): Step[] {
     return this.all("SELECT * FROM steps WHERE status='queued' ORDER BY idx").map(toStep);
@@ -359,7 +376,52 @@ export class Store {
   failStaleJobs() {
     this.run("UPDATE jobs SET status='failed', error='The app closed while this was running.', finished=? WHERE status='running'", now());
     this.run("UPDATE steps SET status='failed' WHERE status='running'");
-    this.run("UPDATE steps SET status='todo' WHERE status='queued'");
+    this.run("UPDATE steps SET status='todo' WHERE status='queued' AND chat_msg=''"); // chat steps resume by themselves
+  }
+
+  // ---- chat ---------------------------------------------------------------------------------------
+  listChat(projectId: string, limit = 300): ChatMessage[] {
+    return this.all("SELECT * FROM (SELECT *, rowid AS rid FROM chat WHERE project_id=? ORDER BY created DESC, rowid DESC LIMIT ?) ORDER BY created, rid",
+      projectId, limit).map(toChat);
+  }
+  getChat(id: string): ChatMessage {
+    const r = this.get("SELECT * FROM chat WHERE id=?", id);
+    if (!r) throw new ValidationError("That message no longer exists.");
+    return toChat(r);
+  }
+  addChat(m: { projectId: string; role: "user" | "assistant"; author: string; content?: string; private?: boolean;
+    status?: ChatStatus; mode?: ChatMode | ""; reason?: string; replyTo?: string }): ChatMessage {
+    this.getProject(m.projectId);
+    const id = randomUUID();
+    const ts = now();
+    this.run("INSERT INTO chat(id,project_id,role,author,content,private,status,mode,reason,reply_to,created,updated) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
+      id, m.projectId, m.role, m.author, (m.content ?? "").slice(0, 200_000), m.private ? 1 : 0, m.status ?? "done", m.mode ?? "",
+      (m.reason ?? "").slice(0, 400), m.replyTo ?? "", ts, ts);
+    return this.getChat(id);
+  }
+  updateChat(id: string, c: Partial<Pick<ChatMessage, "content" | "status" | "mode" | "reason" | "author" | "private">>): ChatMessage {
+    const cur = this.getChat(id);
+    this.run("UPDATE chat SET content=?, status=?, mode=?, reason=?, author=?, private=?, updated=? WHERE id=?",
+      (c.content ?? cur.content).slice(0, 200_000), c.status ?? cur.status, c.mode ?? cur.mode, (c.reason ?? cur.reason).slice(0, 400),
+      c.author ?? cur.author, (c.private ?? cur.private) ? 1 : 0, now(), id);
+    return this.getChat(id);
+  }
+  /** After a restart: a reply that was being written can't continue, but one whose steps are still waiting
+   * (for your approval, or queued) carries on when those steps finish. */
+  failStaleChat() {
+    for (const r of this.all("SELECT id FROM chat WHERE status IN ('thinking','working','waiting')")) {
+      const open = this.get("SELECT COUNT(*) AS n FROM steps WHERE chat_msg=? AND status IN ('todo','queued')", String(r.id));
+      if (!open || Number(open.n) === 0) this.run("UPDATE chat SET status='stopped', updated=? WHERE id=?", now(), String(r.id));
+    }
+  }
+  /** Cloud calls started today (local time), per worker: for the usage counter. */
+  cloudCallsToday(): Record<string, number> {
+    const start = new Date();
+    start.setHours(0, 0, 0, 0);
+    const out: Record<string, number> = {};
+    for (const r of this.all(`SELECT agent, COUNT(*) AS n FROM jobs WHERE started >= ? AND agent IN (${CLOUD.map(() => "?").join(",")}) GROUP BY agent`,
+      start.toISOString(), ...CLOUD)) out[String(r.agent)] = Number(r.n);
+    return out;
   }
 
   getSetting(key: string, fallback: string): string {

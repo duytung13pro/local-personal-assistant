@@ -4,11 +4,12 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync, renameSync } from "
 import { readdir, readFile as readFileAsync, stat } from "node:fs/promises";
 import { join, resolve, relative, sep } from "node:path";
 import { Store, ValidationError } from "./db";
-import { AgentError, KEEP_ALIVE, agentStatuses, ollamaChat, ollamaPost, runClaude, runCodex } from "./providers";
+import { AgentError, KEEP_ALIVE, agentStatuses, ollamaChat, ollamaPost, ollamaStream, runClaude, runClaudeChat, runCodex, runCodexEdit } from "./providers";
+import { RECENT, SUMMARY_SYSTEM, contextText, mergePrompt, parseRoute, routerPrompt, runPlanner, selfSystem, workerPrompt, type Route } from "./chat";
 import { runLocalCoder } from "./localcoder";
 import { goodPlan, parsePlan, parseReview, plannerPrompt, reviewPrompt, rulePlan, stepPrompt, type Draft } from "./orchestrator";
-import type { ConnectionsReport, PlanResult, Step, WorkerId } from "../shared/types";
-import { ASSIGNABLE, WORKERS, isWorker } from "../shared/workers";
+import type { ChatMessage, ConnectionsReport, PlanResult, Project, Step, WorkerId } from "../shared/types";
+import { ASSIGNABLE, CHAT_ROUTABLE, WORKERS, isCloud, isWorker, parseMention } from "../shared/workers";
 
 const ROOT = app.getAppPath();
 const DATA = resolve(process.env.PA_DATA_DIR || join(ROOT, "data"));
@@ -27,8 +28,9 @@ if (!SHOT && !app.requestSingleInstanceLock()) app.quit();
 
 const store = new Store(join(DATA, "personal-assistant.db"));
 store.failStaleJobs();
+store.failStaleChat();
 let win: BrowserWindow | null = null;
-const running = new Map<string, { projectId: string; writes: boolean }>(); // stepId -> info
+const running = new Map<string, { projectId: string; writes: boolean; abort: AbortController }>(); // stepId -> info
 
 const changed = (what: string) => win?.webContents.send("pa:changed", what);
 const projectDir = (id: string) => {
@@ -106,7 +108,7 @@ handle("previewStep", (id) => {
 
 // ---- the team: settings and availability -----------------------------------------------------------
 const modelOf = (w: WorkerId) => store.getSetting(`model:${w}`, WORKERS[w].model ?? "");
-const enabledOf = (w: WorkerId) => store.getSetting(`enabled:${w}`, w === "claude" ? "0" : "1") === "1";
+const enabledOf = (w: WorkerId) => store.getSetting(`enabled:${w}`, "1") === "1";
 function settingsMaps() {
   const ids = Object.keys(WORKERS) as WorkerId[];
   return {
@@ -203,6 +205,7 @@ handle("runStep", (id) => {
   const s = store.getStep(id);
   if (s.status === "running") throw new ValidationError("That step is already running.");
   store.updateStep(id, { status: "queued" });
+  if (s.chatMsg) { try { store.updateChat(s.chatMsg, { status: "working" }); changed("chat"); } catch { /* gone */ } }
   pump();
 }, "steps");
 handle("runAll", (pid) => {
@@ -233,34 +236,230 @@ function start(step: Step, siblings: Step[]) {
   const project = store.getProject(step.projectId);
   const prompt = stepPrompt(project, siblings, step);
   const folder = projectDir(project.id);
-  running.set(step.id, { projectId: project.id, writes: WORKERS[step.agent].writes });
+  const abort = new AbortController();
+  running.set(step.id, { projectId: project.id, writes: WORKERS[step.agent].writes, abort });
   store.updateStep(step.id, { status: "running" });
   const job = store.startJob({ projectId: project.id, stepId: step.id, agent: step.agent,
     title: `${WORKERS[step.agent].name}: ${step.title}` });
   changed("steps");
+  // A single-worker chat reply from a local text model streams straight into the chat.
+  let streamTo = "";
+  if (step.chatMsg) {
+    try { if (store.getChat(step.chatMsg).mode !== "split") streamTo = step.chatMsg; } catch { /* message deleted */ }
+  }
   (async () => {
     try {
       if (step.agent !== "chatgpt" && !enabledOf(step.agent))
         throw new AgentError(`${WORKERS[step.agent].name} is turned off in Connections.`);
       const last = join(DATA, `codex-last-${job.id}.txt`);
+      const sig = abort.signal;
+      const system = "You are a careful worker on the user's own PC. Answer in Markdown.";
       let output: string;
-      if (step.agent === "qwen-coder") output = await runLocalCoder(modelOf("qwen-coder"), prompt, folder);
-      else if (step.agent === "claude") output = await runClaude(prompt, folder);
-      else if (step.agent === "chatgpt") output = await runCodex(prompt, folder, last);
-      else output = await ollamaChat(modelOf(step.agent), "You are a careful worker on the user's own PC. Answer in Markdown.", prompt);
+      if (step.agent === "qwen-coder") output = await runLocalCoder(modelOf("qwen-coder"), prompt, folder, undefined, sig);
+      else if (step.agent === "claude") output = await runClaude(prompt, folder, sig);
+      else if (step.agent === "claude-chat") output = await runClaudeChat(prompt, folder, sig);
+      else if (step.agent === "chatgpt") output = await runCodex(prompt, folder, last, sig);
+      else if (step.agent === "codex") output = await runCodexEdit(prompt, folder, last, sig);
+      else if (streamTo) {
+        store.updateChat(streamTo, { status: "working" });
+        changed("chat");
+        output = await ollamaStream(modelOf(step.agent), system, prompt, (so) => delta(streamTo, so), { signal: sig });
+      } else output = await ollamaChat(modelOf(step.agent), system, prompt, { signal: sig });
       store.updateStep(step.id, { status: "done", output: output || "(finished without a written answer)" });
       store.finishJob(job.id, true, output);
     } catch (e) {
-      const msg = e instanceof Error ? e.message : String(e);
+      const msg = abort.signal.aborted ? "Stopped by you." : e instanceof Error ? e.message : String(e);
       store.updateStep(step.id, { status: "failed", output: msg });
       store.finishJob(job.id, false, "", msg);
     } finally {
       running.delete(step.id);
       changed("steps");
+      chatStepSettled(store.getStep(step.id));
       pump();
     }
   })();
 }
+
+// ---- Chat: the head chef routes each message --------------------------------------------------------
+const CHEF: WorkerId = "qwen"; // head chef model = the "qwen" worker's model (qwen3:30b by default)
+const streams = new Map<string, AbortController>(); // chat message id -> its own streaming work (self/planner/merge)
+const delta = (id: string, text: string) => win?.webContents.send("pa:chatDelta", id, text);
+
+function chatSummary(pid: string) {
+  return store.getSetting(`chatSummary:${pid}`, "");
+}
+
+/** Keep a short running summary of older, non-private messages (local, in the background). */
+async function refreshSummary(pid: string) {
+  const all = store.listChat(pid).filter((m) => !m.private && m.content.trim() && m.status === "done");
+  const older = all.slice(0, Math.max(0, all.length - RECENT));
+  const covered = Number(store.getSetting(`chatSummaryCount:${pid}`, "0"));
+  if (older.length - covered < 6) return;
+  try {
+    const text = `${chatSummary(pid) ? `Summary so far: ${chatSummary(pid)}\n\n` : ""}${older.slice(covered)
+      .map((m) => `${m.role === "user" ? "User" : "Assistant"}: ${m.content.slice(0, 1500)}`).join("\n\n")}`;
+    const s = await ollamaChat(modelOf("qwen-fast"), SUMMARY_SYSTEM, text, { timeoutMs: 120_000 });
+    store.setSetting(`chatSummary:${pid}`, s.slice(0, 1500));
+    store.setSetting(`chatSummaryCount:${pid}`, String(older.length));
+  } catch { /* try again next time */ }
+}
+
+handle("listChat", (pid) => store.listChat(pid));
+handle("chatUsage", () => ({ today: store.cloudCallsToday() }));
+
+handle("sendChat", async (pid: string, text: string) => {
+  const raw = String(text ?? "").trim();
+  if (!raw) throw new ValidationError("Type a message first.");
+  if (raw.length > 12000) throw new ValidationError("That message is too long (12,000 characters max).");
+  const project = store.getProject(pid);
+  const history = store.listChat(pid);
+  const user = store.addChat({ projectId: pid, role: "user", author: "you", content: raw });
+  const reply = store.addChat({ projectId: pid, role: "assistant", author: "chef", status: "thinking", replyTo: user.id });
+  changed("chat");
+  void route(project, history, user.content, reply.id);
+  return reply.id;
+});
+
+async function route(project: Project, history: ChatMessage[], text: string, replyId: string) {
+  const ctl = new AbortController();
+  streams.set(replyId, ctl);
+  try {
+    const t = await team();
+    const avail = t.ready.filter((w) => CHAT_ROUTABLE.includes(w));
+    const [mention, body] = parseMention(text);
+    let r: Route | null = null;
+    if (mention) {
+      if (!avail.includes(mention)) throw new AgentError(`${WORKERS[mention].name} isn't available right now (see Connections).`);
+      r = { mode: "single", worker: mention, reason: `You asked for ${WORKERS[mention].name}.` };
+    } else if (avail.includes(CHEF)) {
+      const ans = await ollamaChat(modelOf(CHEF), "Reply with JSON only.",
+        routerPrompt(project, contextText(history, chatSummary(project.id), false), text, avail),
+        { json: true, think: false, timeoutMs: 15 * 60_000, signal: ctl.signal }); // JSON-constrained: no need to think
+      r = parseRoute(ans, avail);
+    }
+    if (!r) r = { mode: "self", reason: avail.includes(CHEF) ? "Answering directly." : "Head chef unavailable; answering with what's ready." };
+    const content = mention ? body : text;
+    store.updateChat(replyId, { mode: r.mode, reason: r.reason, status: r.mode === "self" || r.mode === "planner" ? "working" : "waiting" });
+    changed("chat");
+
+    if (r.mode === "self") {
+      const chef = avail.includes(CHEF) ? CHEF : avail.find((w) => WORKERS[w].local);
+      if (!chef) throw new AgentError("No local model is ready. Start Ollama (see Connections).");
+      store.updateChat(replyId, { author: chef });
+      const out = await ollamaStream(modelOf(chef), selfSystem(project),
+        `${contextText(history, chatSummary(project.id), false) ? `Conversation so far:\n${contextText(history, chatSummary(project.id), false)}\n\n` : ""}User: ${content}`,
+        (so) => delta(replyId, so), { signal: ctl.signal });
+      store.updateChat(replyId, { content: out, status: "done" });
+    } else if (r.mode === "planner") {
+      if (!avail.includes(CHEF)) throw new AgentError("Planner help needs the local head chef model (see Connections).");
+      store.updateChat(replyId, { author: CHEF, private: true });
+      const { answer, changes } = await runPlanner(store, modelOf(CHEF), contextText(history, "", false), content, ctl.signal);
+      store.updateChat(replyId, { content: answer || (changes.length ? `Done: ${changes.join("; ")}.` : "Done."), status: "done", private: true });
+      if (changes.length) { changed("tasks"); changed("events"); }
+    } else {
+      const ctxCloud = contextText(history, chatSummary(project.id), true);
+      const ctxLocal = contextText(history, chatSummary(project.id), false);
+      const drafts: Draft[] = r.mode === "single"
+        ? [{ ref: "t1", title: content.split("\n")[0].slice(0, 80) || "Request", agent: r.worker!, why: r.reason, prompt: content, deps: [] }]
+        : r.tasks!;
+      for (const d of drafts) d.prompt = workerPrompt(d.prompt, isCloud(d.agent) ? ctxCloud : ctxLocal);
+      if (r.mode === "single") store.updateChat(replyId, { author: r.worker! });
+      const steps = store.replaceSteps(project.id, drafts, true, replyId);
+      // Local steps start now; cloud steps wait for the user's OK in the chat ticket.
+      for (const s of steps) if (!isCloud(s.agent)) store.updateStep(s.id, { status: "queued" });
+      store.updateChat(replyId, { status: steps.some((s) => isCloud(s.agent)) ? "waiting" : "working" });
+      changed("steps");
+      pump();
+    }
+  } catch (e) {
+    const stopped = ctl.signal.aborted;
+    store.updateChat(replyId, { status: stopped ? "stopped" : "failed",
+      content: stopped ? store.getChat(replyId).content : `Something went wrong: ${(e as Error).message}` });
+  } finally {
+    streams.delete(replyId);
+    changed("chat");
+    void refreshSummary(project.id);
+  }
+}
+
+/** Called whenever a step finishes: completes its chat message when all of the message's steps are settled. */
+function chatStepSettled(step: Step) {
+  if (!step.chatMsg) return;
+  let msg: ChatMessage;
+  try { msg = store.getChat(step.chatMsg); } catch { return; }
+  if (msg.status === "stopped") return;
+  const steps = store.stepsOfChat(msg.id);
+  if (steps.some((s) => s.status === "running" || s.status === "queued")) {
+    store.updateChat(msg.id, { status: "working" });
+    return changed("chat");
+  }
+  if (steps.some((s) => s.status === "todo")) return changed("chat"); // still waiting for an approval
+  if (msg.mode !== "split") {
+    const s = steps[0];
+    store.updateChat(msg.id, { content: s.output, status: s.status === "done" ? "done" : "failed" });
+    changed("chat");
+    return void refreshSummary(msg.projectId);
+  }
+  void mergeChat(msg, steps);
+}
+
+async function mergeChat(msg: ChatMessage, steps: Step[]) {
+  const ctl = new AbortController();
+  streams.set(msg.id, ctl);
+  store.updateChat(msg.id, { status: "working", author: CHEF });
+  changed("chat");
+  const request = msg.replyTo ? store.getChat(msg.replyTo).content : "";
+  const parts = steps.map((s) => ({ title: s.title, worker: s.agent, status: s.status, output: s.output }));
+  try {
+    const out = await ollamaStream(modelOf(CHEF), "You write the final answer for the user's AI team.", mergePrompt(request, parts),
+      (so) => delta(msg.id, so), { signal: ctl.signal });
+    store.updateChat(msg.id, { content: out, status: steps.every((s) => s.status === "done") ? "done" : "failed" });
+  } catch (e) {
+    store.updateChat(msg.id, { status: ctl.signal.aborted ? "stopped" : "failed",
+      content: parts.map((x) => `**${x.title}** (${WORKERS[x.worker].name}): ${x.output.slice(0, 3000)}`).join("\n\n") });
+  } finally {
+    streams.delete(msg.id);
+    changed("chat");
+    void refreshSummary(msg.projectId);
+  }
+}
+
+handle("declineStep", (id) => {
+  const s = store.getStep(id);
+  if (s.status !== "todo") throw new ValidationError("Only a step that hasn't started can be declined.");
+  store.updateStep(id, { status: "failed", output: "Declined by you." });
+  for (const d of store.listSteps(s.projectId)) if (d.deps.includes(id) && d.status === "queued") store.updateStep(d.id, { status: "failed", output: "Skipped: a task it depends on was declined." });
+  chatStepSettled(store.getStep(id));
+  pump();
+}, "steps");
+
+handle("stopChat", (mid) => {
+  const msg = store.getChat(mid);
+  streams.get(mid)?.abort();
+  for (const s of store.stepsOfChat(mid)) {
+    if (running.has(s.id)) running.get(s.id)!.abort.abort();
+    else if (s.status === "todo" || s.status === "queued") store.updateStep(s.id, { status: "failed", output: "Stopped by you." });
+  }
+  store.updateChat(msg.id, { status: "stopped" });
+  changed("steps");
+}, "chat");
+
+handle("rerunChat", (mid, worker) => {
+  if (!isWorker(worker)) throw new ValidationError("Unknown model.");
+  const msg = store.getChat(mid);
+  if (!msg.replyTo) throw new ValidationError("There's no request to re-run.");
+  const req = store.getChat(msg.replyTo);
+  const reply = store.addChat({ projectId: msg.projectId, role: "assistant", author: worker, status: "waiting", mode: "single",
+    reason: `Re-run with ${WORKERS[worker].name}, as you asked.`, replyTo: req.id });
+  const history = store.listChat(msg.projectId).filter((m) => m.created < req.created);
+  const ctx = contextText(history, chatSummary(msg.projectId), isCloud(worker));
+  const [, body] = parseMention(req.content);
+  const [step] = store.replaceSteps(msg.projectId, [{ ref: "t1", title: body.split("\n")[0].slice(0, 80) || "Request", agent: worker,
+    why: "Re-run", prompt: workerPrompt(body, ctx), deps: [] }], true, reply.id);
+  if (!isCloud(worker)) { store.updateStep(step.id, { status: "queued" }); store.updateChat(reply.id, { status: "working" }); pump(); }
+  changed("steps");
+  return reply.id;
+}, "chat");
 
 handle("listJobs", (limit) => store.listJobs(limit ?? 100));
 handle("connections", async (): Promise<ConnectionsReport> => {
@@ -352,10 +551,12 @@ async function screenshots() {
     await wait(view === "connections" ? 2500 : 500);
     const img = await win!.webContents.capturePage();
     writeFileSync(join(dir, `${view}.png`), img.toPNG());
-    if (view === "ai") { // also the team board
-      await win!.webContents.executeJavaScript(`document.querySelectorAll('[role=tab]')[1]?.click()`);
+    if (view === "ai") { // also the team board, then back to the chat
+      await win!.webContents.executeJavaScript(`document.querySelectorAll('[role=tab]')[2]?.click()`);
       await wait(500);
       writeFileSync(join(dir, "ai-team.png"), (await win!.webContents.capturePage()).toPNG());
+      await win!.webContents.executeJavaScript(`document.querySelectorAll('[role=tab]')[0]?.click()`);
+      await wait(300);
     }
   }
   console.log(`screenshots saved to ${dir}`);
@@ -368,7 +569,7 @@ app.on("second-instance", () => {
     win.focus();
   }
 });
-app.whenReady().then(createWindow);
+app.whenReady().then(() => { createWindow(); pump(); }); // resume chat steps queued before a restart
 app.on("window-all-closed", () => {
   store.close();
   app.quit();

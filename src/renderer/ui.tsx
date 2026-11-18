@@ -78,6 +78,8 @@ export function Checkbox({ checked, onChange, label }: { checked: boolean; onCha
 
 const AGENT_STYLE: Record<AgentId, string> = {
   chatgpt: "bg-[#e5f4f2] text-codex",
+  codex: "bg-[#dff0ed] text-[#0b5f58]",
+  "claude-chat": "bg-[#fdf1ea] text-[#b5521f]",
   "qwen-coder": "bg-[#ece7fd] text-qwen",
   qwen: "bg-[#f1ecfd] text-qwen",
   "qwen-fast": "bg-[#f4f1fd] text-[#7c64c9]",
@@ -85,7 +87,7 @@ const AGENT_STYLE: Record<AgentId, string> = {
   claude: "bg-[#fdeee4] text-claude",
 };
 export const AGENT_LABEL: Record<AgentId, string> = {
-  chatgpt: "ChatGPT", "qwen-coder": "Qwen Coder", qwen: "Qwen", "qwen-fast": "Qwen Fast", "gpt-oss": "GPT-OSS", claude: "Claude",
+  chatgpt: "ChatGPT", codex: "Codex", "claude-chat": "Claude", "qwen-coder": "Qwen Coder", qwen: "Qwen", "qwen-fast": "Qwen Fast", "gpt-oss": "GPT-OSS", claude: "Claude Code",
 };
 
 export function AgentBadge({ agent }: { agent: AgentId }) {

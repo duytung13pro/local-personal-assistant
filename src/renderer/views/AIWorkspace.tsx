@@ -2,10 +2,12 @@ import { useEffect, useMemo, useState } from "react";
 import { ClipboardCheck, FolderOpen, Loader2, Play, Plus, Sparkles, Square, Trash2 } from "lucide-react";
 import type { Project, Step, WorkerId } from "../../shared/types";
 import { waves } from "../../main/orchestrator";
+import { ChatTab } from "./Chat";
+import { isCloud } from "../../shared/workers";
 import { api, attempt, cx, toast, useData } from "../lib";
 import { AGENT_LABEL, AgentBadge, Button, Dialog, Empty, Field, inputCls, textareaCls } from "../ui";
 
-type Tab = "brief" | "team" | "files";
+type Tab = "chat" | "brief" | "team" | "files";
 
 export function AIWorkspace() {
   const [projects] = useData(() => api.listProjects(), [], ["projects"]);
@@ -56,11 +58,11 @@ export function AIWorkspace() {
 }
 
 function ProjectPane({ project, onDeleted }: { project: Project; onDeleted: () => void }) {
-  const [tab, setTab] = useState<Tab>("brief");
+  const [tab, setTab] = useState<Tab>("chat");
   return (
     <div className="flex h-full flex-col overflow-hidden rounded-xl border border-line bg-panel">
       <div className="flex items-end gap-1 border-b border-line px-4 pt-2">
-        {([["brief", "Brief"], ["team", "Team plan"], ["files", "Files"]] as [Tab, string][]).map(([t, label]) => (
+        {([["chat", "Chat"], ["brief", "Brief"], ["team", "Team plan"], ["files", "Files"]] as [Tab, string][]).map(([t, label]) => (
           <button key={t} type="button" onClick={() => setTab(t)} aria-selected={tab === t} role="tab"
             className={cx("relative h-10 px-3 text-[13.5px] transition-colors duration-100", tab === t ? "font-semibold text-ink" : "text-muted hover:text-ink")}>
             {label}
@@ -68,7 +70,8 @@ function ProjectPane({ project, onDeleted }: { project: Project; onDeleted: () =
           </button>
         ))}
       </div>
-      <div className="min-h-0 flex-1 overflow-y-auto p-5">
+      {tab === "chat" && <div className="min-h-0 flex-1"><ChatTab project={project} onShowFiles={() => setTab("files")} /></div>}
+      <div className="min-h-0 flex-1 overflow-y-auto p-5" hidden={tab === "chat"}>
         <div hidden={tab !== "brief"}><BriefTab project={project} onDeleted={onDeleted} onPlan={() => setTab("team")} /></div>
         <div hidden={tab !== "team"}><TeamTab project={project} /></div>
         {tab === "files" && <FilesTab project={project} />}
@@ -109,7 +112,7 @@ function BriefTab({ project, onDeleted, onPlan }: { project: Project; onDeleted:
   );
 }
 
-const ASSIGN_OPTIONS: WorkerId[] = ["qwen-coder", "qwen", "qwen-fast", "gpt-oss", "claude"];
+const ASSIGN_OPTIONS: WorkerId[] = ["qwen-coder", "qwen", "qwen-fast", "gpt-oss", "codex", "claude", "claude-chat"];
 
 type Ask = { kind: "plan" | "review" | "claude"; title: string; text: string; go: () => Promise<unknown> };
 
@@ -149,17 +152,17 @@ function TeamTab({ project }: { project: Project }) {
     }
   };
   const runAll = () => {
-    const cloud = open.filter((s) => s.agent === "claude");
+    const cloud = open.filter((s) => isCloud(s.agent) && !s.chatMsg);
     const go = async () => { const n = await api.runAll(project.id); toast.info(`${n} task${n === 1 ? "" : "s"} queued. Independent tasks run at the same time.`); };
     if (!cloud.length) return void attempt(go);
     setAsk({ kind: "claude", title: "Some tasks go to Claude (cloud)", go,
-      text: `These tasks will be sent to Anthropic (Claude Code) with the brief and their inputs:\n\n${cloud.map((s) => `• ${s.title}`).join("\n")}\n\nEverything else runs locally.` });
+      text: `These tasks will be sent to a cloud model (ChatGPT/Codex or Claude) with the brief and their inputs:\n\n${cloud.map((s) => `• ${s.title}`).join("\n")}\n\nEverything else runs locally.` });
   };
   const runOne = async (s: Step) => {
-    if (s.agent !== "claude") return void attempt(() => api.runStep(s.id));
+    if (!isCloud(s.agent)) return void attempt(() => api.runStep(s.id));
     try {
       const text = await api.previewStep(s.id);
-      setAsk({ kind: "claude", title: "Send this task to Claude (cloud)?", text, go: () => api.runStep(s.id) });
+      setAsk({ kind: "claude", title: `Send this task to ${AGENT_LABEL[s.agent]} (cloud)?`, text, go: () => api.runStep(s.id) });
     } catch (e) {
       toast.error((e as Error).message);
     }
@@ -221,7 +224,7 @@ function TeamTab({ project }: { project: Project }) {
             await attempt(a.go);
           }}>Send</Button>
         </>}>
-        <p className="pb-2 text-[13px] text-muted">{ask?.kind === "claude" ? "This uses your Claude Pro allowance." :
+        <p className="pb-2 text-[13px] text-muted">{ask?.kind === "claude" ? "This uses your ChatGPT or Claude plan allowance." :
           "This exact text goes to ChatGPT through your signed-in Codex app and uses your ChatGPT plan. ChatGPT only reads; it changes nothing."}</p>
         <pre data-selectable className="max-h-[52vh] overflow-auto whitespace-pre-wrap rounded-lg border border-line bg-[#fafaf8] p-3 font-mono text-[12px] leading-relaxed">{ask?.text}</pre>
       </Dialog>

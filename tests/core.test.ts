@@ -8,6 +8,8 @@ import { addDays, isValidDate, layoutTimed, monthGrid, rangeLabel } from "../src
 import { Store, ValidationError } from "../src/main/db";
 import { goodPlan, parsePlan, parseReview, rulePlan, stepPrompt, waves } from "../src/main/orchestrator";
 import { matches } from "../src/shared/filters";
+import { parseMention } from "../src/shared/workers";
+import { contextText, parseRoute, runPlannerTool } from "../src/main/chat";
 
 const dir = () => mkdtempSync(join(process.env.PA_TEST_TMP ?? tmpdir(), "pa-test-"));
 
@@ -131,7 +133,7 @@ test("orchestrator: review JSON and dependency waves", () => {
 test("orchestrator: a task's prompt carries only the results it depends on", () => {
   const p = { id: "p", title: "Budget app", brief: "Track spending", notes: "", created: "", updated: "" };
   const mk = (id: string, status: "done" | "todo", output: string, deps: string[] = []) => ({ id, projectId: "p", idx: 0,
-    title: `S${id}`, agent: "qwen-coder" as const, why: "", prompt: `do ${id}`, deps, status, output, updated: "" });
+    title: `S${id}`, agent: "qwen-coder" as const, why: "", prompt: `do ${id}`, deps, chatMsg: "", status, output, updated: "" });
   const steps = [mk("a", "done", "SPEC-OUTPUT"), mk("b", "done", "UNRELATED"), mk("c", "todo", "", ["a"])];
   const text = stepPrompt(p, steps, steps[2]);
   assert.match(text, /SPEC-OUTPUT/);
@@ -152,7 +154,7 @@ test("store: steps keep dependencies; queueing retries failures", () => {
     assert.equal(s.queuedSteps().length, 2);
     s.unqueue(p.id);
     assert.equal(s.queuedSteps().length, 0);
-    assert.throws(() => s.replaceSteps(p.id, [{ title: "x", agent: "codex" as never, why: "", prompt: "" }]), /Unknown worker/);
+    assert.throws(() => s.replaceSteps(p.id, [{ title: "x", agent: "gpt5" as never, why: "", prompt: "" }]), /Unknown worker/);
   } finally {
     s.close();
     rmSync(dd, { recursive: true, force: true });
@@ -166,4 +168,81 @@ test("checklist search: every word must match title or notes", () => {
   assert.ok(!matches(t, "rent water", "open", "all", "any", "2026-11-18"));
   assert.ok(matches(t, "", "open", "high", "overdue", "2026-11-18"));
   assert.ok(!matches(t, "", "done", "all", "any", "2026-11-18"));
+});
+
+test("chat: @mentions pick a model; unknown ones are left alone", () => {
+  assert.deepEqual(parseMention("@codex fix the login bug"), ["codex", "fix the login bug"]);
+  assert.deepEqual(parseMention("@claude-chat: write a poem"), ["claude-chat", "write a poem"]);
+  assert.deepEqual(parseMention("@coder add a test"), ["qwen-coder", "add a test"]);
+  assert.deepEqual(parseMention("@bob hello"), [null, "@bob hello"]);
+  assert.deepEqual(parseMention("email me @home"), [null, "email me @home"]);
+});
+
+test("chat: routes are validated against the workers that are ready", () => {
+  const ready = ["qwen", "qwen-coder", "chatgpt", "gpt-oss"] as const;
+  assert.deepEqual(parseRoute('{"mode":"self","reason":"Just a greeting."}', [...ready]), { mode: "self", reason: "Just a greeting." });
+  assert.equal(parseRoute('{"mode":"single","worker":"claude","reason":"x"}', [...ready]), null, "unavailable worker refused");
+  assert.equal(parseRoute('{"mode":"single","worker":"chatgpt","reason":"Hard question."}', [...ready])?.worker, "chatgpt");
+  const split = parseRoute(`{"mode":"split","reason":"Prep then cook.","tasks":[{"id":"t1","title":"Spec","worker":"qwen"},
+    {"id":"t2","title":"Build","worker":"qwen-coder","deps":["t1"]}]}`, [...ready]);
+  assert.deepEqual(split?.tasks?.map((t) => [t.agent, t.deps]), [["qwen", []], ["qwen-coder", ["t1"]]]);
+  assert.equal(parseRoute('{"mode":"split","tasks":[{"id":"t1","title":"Only one","worker":"qwen"}]}', [...ready]), null);
+  assert.equal(parseRoute("I think you should...", [...ready]), null);
+});
+
+test("chat: planner answers never reach cloud models", () => {
+  const m = (role: "user" | "assistant", content: string, priv = false) => ({ id: content, projectId: "p", role, author: role === "user" ? "you" : "qwen",
+    content, private: priv, status: "done" as const, mode: "" as const, reason: "", replyTo: "", created: "" });
+  const msgs = [m("user", "what's due friday"), m("assistant", "Pay rent (due Friday)", true), m("user", "write a haiku")];
+  assert.match(contextText(msgs, "", false), /Pay rent/);
+  assert.doesNotMatch(contextText(msgs, "", true), /Pay rent/);
+});
+
+test("chat: planner tools change real tasks (with undo) and report what changed", () => {
+  const dd = dir();
+  const s = new Store(join(dd, "c.db"));
+  try {
+    const changes: string[] = [];
+    const t = JSON.parse(runPlannerTool(s, "add_task", { title: "Call the bank", due: "2026-11-20", priority: "high" }, changes));
+    runPlannerTool(s, "set_task_done", { id: t.id, done: true }, changes);
+    assert.deepEqual(changes, ['added task "Call the bank"', 'completed "Call the bank"']);
+    assert.match(runPlannerTool(s, "add_task", { title: "x", due: "2026-02-31" }, []), /^Error: Due date/);
+    assert.match(runPlannerTool(s, "delete_task", { id: "nope" }, []), /^Error:/);
+    assert.equal(s.latestUndo()?.label, 'Complete "Call the bank"');
+  } finally {
+    s.close();
+    rmSync(dd, { recursive: true, force: true });
+  }
+});
+
+test("chat: messages, chat steps stay out of Run all, cloud usage counts today", () => {
+  const dd = dir();
+  const s = new Store(join(dd, "m.db"));
+  try {
+    const p = s.createProject("P");
+    const u = s.addChat({ projectId: p.id, role: "user", author: "you", content: "hi" });
+    const a = s.addChat({ projectId: p.id, role: "assistant", author: "chef", status: "thinking", replyTo: u.id });
+    s.updateChat(a.id, { content: "hello", status: "done" });
+    assert.deepEqual(s.listChat(p.id).map((m) => m.content), ["hi", "hello"]);
+    s.replaceSteps(p.id, [{ title: "Team step", agent: "qwen", why: "", prompt: "" }]);
+    s.replaceSteps(p.id, [{ title: "Chat step", agent: "codex", why: "", prompt: "" }], true, a.id);
+    assert.equal(s.queueAll(p.id), 1, "Run all must not send chat steps that wait for approval");
+    assert.equal(s.stepsOfChat(a.id)[0].status, "todo");
+    s.replaceSteps(p.id, [{ title: "Re-plan", agent: "qwen", why: "", prompt: "" }]);
+    assert.equal(s.stepsOfChat(a.id).length, 1, "re-planning the Team board keeps chat steps");
+    s.finishJob(s.startJob({ projectId: p.id, stepId: "", agent: "chatgpt", title: "x" }).id, true, "ok");
+    s.startJob({ projectId: p.id, stepId: "", agent: "qwen", title: "local" });
+    assert.deepEqual(s.cloudCallsToday(), { chatgpt: 1 });
+    const streaming = s.addChat({ projectId: p.id, role: "assistant", author: "chef", status: "working" });
+    s.failStaleChat();
+    assert.equal(s.getChat(streaming.id).status, "stopped", "a reply that was being written stops on restart");
+    assert.equal(s.getChat(a.id).status, "done", "finished replies are untouched");
+    const waiting = s.addChat({ projectId: p.id, role: "assistant", author: "chef", status: "waiting" });
+    s.replaceSteps(p.id, [{ title: "Needs OK", agent: "claude", why: "", prompt: "" }], true, waiting.id);
+    s.failStaleChat();
+    assert.equal(s.getChat(waiting.id).status, "waiting", "a reply waiting for your approval survives a restart");
+  } finally {
+    s.close();
+    rmSync(dd, { recursive: true, force: true });
+  }
 });

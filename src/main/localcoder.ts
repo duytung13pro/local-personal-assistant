@@ -103,7 +103,8 @@ export function textToolCalls(content: string): { function: { name: string; argu
 
 interface Msg { role: string; content: string; tool_calls?: { function: { name: string; arguments: unknown } }[]; tool_name?: string }
 
-export async function runLocalCoder(model: string, prompt: string, folder: string, timeoutMs = 20 * 60_000): Promise<string> {
+export async function runLocalCoder(model: string, prompt: string, folder: string, timeoutMs = 20 * 60_000,
+  signal?: AbortSignal): Promise<string> {
   const root = resolve(folder);
   await mkdir(root, { recursive: true });
   const deadline = Date.now() + timeoutMs;
@@ -112,8 +113,9 @@ export async function runLocalCoder(model: string, prompt: string, folder: strin
   for (let turn = 0; turn < MAX_TURNS; turn++) {
     const left = deadline - Date.now();
     if (left <= 0) throw new AgentError("Timed out.");
+    if (signal?.aborted) throw new AgentError("Stopped.");
     const { message: msg } = await ollamaPost<{ message: Msg }>("/api/chat", { model, messages, tools: TOOLS, stream: false,
-      keep_alive: KEEP_ALIVE, options: { temperature: 0.2, num_ctx: 32768 } }, left);
+      keep_alive: KEEP_ALIVE, options: { temperature: 0.2, num_ctx: 32768 } }, left, signal);
     if (!msg.tool_calls?.length) {
       const recovered = textToolCalls(msg.content ?? "");
       if (recovered.length) msg.tool_calls = recovered;

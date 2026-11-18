@@ -54,6 +54,7 @@ export interface Step {
   why: string;
   prompt: string;
   deps: string[]; // ids of steps that must finish first
+  chatMsg: string; // chat message this step belongs to ("" = Team plan)
   status: StepStatus;
   output: string;
   updated: string;
@@ -91,6 +92,26 @@ export interface ConnectionsReport {
   oldDbFound: boolean;
   maxParallel: number;
 }
+
+export type ChatMode = "self" | "planner" | "single" | "split";
+export type ChatStatus = "thinking" | "waiting" | "working" | "done" | "failed" | "stopped";
+
+export interface ChatMessage {
+  id: string;
+  projectId: string;
+  role: "user" | "assistant";
+  author: string; // "you", "chef" or a worker id
+  content: string;
+  /** Planner answers contain your schedule: they are never sent to cloud models. */
+  private: boolean;
+  status: ChatStatus;
+  mode: ChatMode | "";
+  reason: string; // why the head chef routed it this way
+  replyTo: string; // the user message this answers
+  created: string;
+}
+
+export interface ChatUsage { today: Record<string, number> }
 
 export interface PlanResult { steps: Step[]; plannedBy: WorkerId | "rules"; note: string }
 
@@ -136,6 +157,14 @@ export interface Api {
   runStep(id: string): Promise<void>; // queue one step (runs when its dependencies are done)
   runAll(projectId: string): Promise<number>; // queue every unfinished step; returns how many
   stopQueue(projectId: string): Promise<void>; // un-queue steps that have not started
+
+  listChat(projectId: string): Promise<ChatMessage[]>;
+  sendChat(projectId: string, text: string): Promise<string>; // returns the assistant message id
+  declineStep(id: string): Promise<void>; // say no to a cloud step waiting for approval
+  stopChat(messageId: string): Promise<void>; // stop a reply and everything it started
+  rerunChat(messageId: string, worker: WorkerId): Promise<string>; // answer the same request with another model
+  chatUsage(): Promise<ChatUsage>;
+  onChatDelta(cb: (messageId: string, text: string) => void): () => void;
 
   listJobs(limit?: number): Promise<Job[]>;
   connections(): Promise<ConnectionsReport>;

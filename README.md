@@ -3,14 +3,22 @@
 A Windows desktop app for your day (planner, calendar, checklist) with a built-in **multi-model AI team**:
 **ChatGPT plans and reviews, local models on your PC do the work, several at the same time.**
 
-![Team board](docs/team.png)
+![Chat with the head chef](docs/chat.png)
 
 ## What it does
 
 - **Planner** — three day columns of tasks plus an hourly schedule for the selected day.
 - **Calendar** — month grid with events and due tasks; side panel for the selected day.
 - **Checklist** — search (title and notes) with status / priority / due filters.
-- **AI Workspace** — write a brief, then:
+- **AI Workspace → Chat** — talk to your **head chef** (local `qwen3:30b`). For each message it decides, in 1–3 s:
+  answer itself (quick things) · use your **planner** (read/add/move/complete tasks and events, locally only; those replies
+  never reach cloud models) · hand it to **one** model · or **split** it into sub-tasks that run in parallel and merge
+  the results (prep on local "apprentices", the main dish on a stronger "lead"). `@codex`, `@claude`, `@chatgpt`, `@qwen`,
+  `@coder`, `@gpt-oss`, `@fast`, `@claude-chat` pick a model yourself. Every answer shows why it was routed, has
+  "Try with…" to compare models, and a Stop button. Cloud steps wait for **Review & send**; a counter shows today's
+  cloud calls. Replies stream and follow your language (English/Vietnamese). One thread per project; models see the
+  last 10 messages plus a running summary kept locally. Chat sub-tasks also appear on the Team plan board.
+- **AI Workspace → Team plan** — write a brief, then:
   1. **Plan with ChatGPT** → ChatGPT splits the brief into tasks, assigns each to a worker and sets dependencies.
   2. **Run all** → tasks run on local models; tasks that don't depend on each other run **in parallel** (default up to 3).
   3. **Review with ChatGPT** → ChatGPT checks the results and the files, and adds follow-up tasks if needed.
@@ -22,12 +30,14 @@ A Windows desktop app for your day (planner, calendar, checklist) with a built-i
 
 | Worker | Default model | Job | Runs |
 |---|---|---|---|
-| **ChatGPT** | your ChatGPT plan via the Codex CLI | plans and reviews only, never does the work | cloud, read-only, you approve each send |
+| **ChatGPT** | your ChatGPT plan via the Codex CLI | Team plan: plans and reviews. Chat: hard questions | cloud, read-only, you approve each send |
 | **Qwen Coder** | `qwen3-coder:30b` | writes and edits files in the project folder | local |
 | **Qwen** | `qwen3:30b` | specs, drafts, reasoning about sub-problems | local |
 | **Qwen Fast** | `qwen3:4b` | extraction, reformatting, short summaries | local |
 | **GPT-OSS** | `gpt-oss:20b` | second opinions, checking logic and text | local |
-| **Claude** (off by default) | your Claude Pro via Claude Code | large builds the local coder can't manage | cloud, you approve each send |
+| **Codex** | your ChatGPT plan via the Codex CLI | multi-file code changes in the project folder | cloud, sandboxed, you approve each send |
+| **Claude Code** | your Claude Pro via Claude Code | larger builds and UI work in the project folder | cloud, you approve each send |
+| **Claude** | your Claude Pro, no tools | polished writing and analysis | cloud, you approve each send |
 
 If ChatGPT is unavailable, the strongest local model plans with the same instructions; if that fails, a fixed
 plan is used (spec ∥ test cases → build → check).
@@ -51,7 +61,7 @@ checklist data are never sent to any model.
 
     npm install
     npm start            # build and open the app (or double-click "Personal Assistant.cmd")
-    npm test             # 11 automated tests
+    npm test             # 16 automated tests
     npm run typecheck
     npm run shot         # render every view to data\screenshots\*.png
 

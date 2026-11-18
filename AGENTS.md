@@ -11,7 +11,8 @@
 - The renderer never gets Node access; add new capabilities as IPC handlers in `src/main/main.ts`, typed in
   `src/shared/types.ts`, exposed in `src/main/preload.ts`.
 - Pure logic goes in `src/shared/` with tests in `tests/`.
-- Never send calendar/task data to a cloud agent. Cloud steps must keep the preview-and-confirm dialog.
+- Never send calendar/task data to a cloud agent: planner chat replies are `private` and excluded from cloud context.
+  Cloud steps (Team plan and Chat) must keep the preview-and-confirm step.
 - Motion: no animation on frequent actions (view switches, hovers beyond colour, list updates). Enter with
   ease-out under 250 ms; respect prefers-reduced-motion.
 - Save everything on D:. Do not touch `D:\LocalAI` except reading the old database for import.

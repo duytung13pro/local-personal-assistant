@@ -34,5 +34,27 @@ s.replaceSteps(p.id, [
 const st = s.listSteps(p.id);
 s.updateStep(st[0].id, { status: "done", output: "Spec: monthly categories, chart, CSV export." });
 s.updateStep(st[1].id, { status: "running" });
+// a chat thread showing each kind of routing
+const say = (content: string) => s.addChat({ projectId: p.id, role: "user", author: "you", content });
+let u = say("What's due in the next few days?");
+s.addChat({ projectId: p.id, role: "assistant", author: "qwen", private: true, mode: "planner", replyTo: u.id,
+  reason: "You asked about your own deadlines, so I checked the planner here.",
+  content: ["Due soon:", "- **Pay electricity bill**, overdue since Nov 16 (high)", "- **Review Q4 budget draft**, today (high)",
+    "- **Prepare slides for Friday demo**, tomorrow (high)"].join("\n") });
+u = say("Add CSV export to the budget page and double-check the rounding");
+const a = s.addChat({ projectId: p.id, role: "assistant", author: "chef", mode: "split", status: "waiting", replyTo: u.id,
+  reason: "A code change plus a check: Codex leads, local models prep and review." });
+s.replaceSteps(p.id, [
+  { ref: "c1", title: "List CSV columns and number formats", agent: "qwen-fast", why: "", prompt: "x" },
+  { ref: "c2", title: "Implement the CSV export button", agent: "codex", why: "", prompt: "x", deps: ["c1"] },
+  { ref: "c3", title: "Check rounding of totals", agent: "gpt-oss", why: "", prompt: "x", deps: ["c2"] },
+], true, a.id);
+const cs = s.stepsOfChat(a.id);
+s.updateStep(cs[0].id, { status: "done", output: "date, category, amount (2 decimals)" });
+s.updateStep(cs[2].id, { status: "queued" });
+u = say("@chatgpt Is SQLite enough for this app long term?");
+s.addChat({ projectId: p.id, role: "assistant", author: "chatgpt", mode: "single", replyTo: u.id, reason: "You asked for ChatGPT.",
+  content: ["Yes. For a single-user desktop app, **SQLite** is the right choice:", "- one file, no server, fast for thousands of rows",
+    "- WAL mode handles background writes", "", "Move to Postgres only if several people need to edit the same data at once."].join("\n") });
 s.close();
 console.log("seeded", dir);
