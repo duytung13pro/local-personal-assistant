@@ -9,7 +9,7 @@ import { Store, ValidationError } from "../src/main/db";
 import { goodPlan, parsePlan, parseReview, rulePlan, stepPrompt, waves } from "../src/main/orchestrator";
 import { matches } from "../src/shared/filters";
 import { parseMention } from "../src/shared/workers";
-import { contextText, parseRoute, runPlannerTool } from "../src/main/chat";
+import { contextText, fixWriters, parseRoute, parseTeam, runPlannerTool } from "../src/main/chat";
 
 const dir = () => mkdtempSync(join(process.env.PA_TEST_TMP ?? tmpdir(), "pa-test-"));
 
@@ -245,4 +245,19 @@ test("chat: messages, chat steps stay out of Run all, cloud usage counts today",
     s.close();
     rmSync(dd, { recursive: true, force: true });
   }
+});
+
+test("chat: @team asks for a split job", () => {
+  assert.deepEqual(parseTeam("@team build a budget planner"), [true, "build a budget planner"]);
+  assert.deepEqual(parseTeam("  @Team: plan my week"), [true, "plan my week"]);
+  assert.deepEqual(parseTeam("@teams are great"), [false, "@teams are great"]);
+  assert.deepEqual(parseTeam("ask the @team later"), [false, "ask the @team later"]);
+});
+
+test("chat: build tasks given to text-only models are moved to a file-writing worker", () => {
+  const d = (title: string, agent: "gpt-oss" | "qwen" | "chatgpt") => ({ title, agent, why: "", prompt: "" });
+  const fixed = fixWriters([d("Final integration and review", "gpt-oss"), d("Write the README text", "qwen"),
+    d("Implement CSV export", "chatgpt")], ["qwen", "gpt-oss", "qwen-coder", "chatgpt"]);
+  assert.deepEqual(fixed.map((t) => t.agent), ["qwen-coder", "qwen", "qwen-coder"]);
+  assert.deepEqual(fixWriters([d("Build it", "qwen")], ["qwen"]).map((t) => t.agent), ["qwen"], "no writer available: unchanged");
 });

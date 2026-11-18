@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { ClipboardCheck, FolderOpen, Loader2, Play, Plus, Sparkles, Square, Trash2 } from "lucide-react";
+import { ClipboardCheck, FolderOpen, Loader2, Pencil, Play, Plus, Sparkles, Square, Trash2 } from "lucide-react";
 import type { Project, Step, WorkerId } from "../../shared/types";
 import { waves } from "../../main/orchestrator";
 import { ChatTab } from "./Chat";
@@ -12,14 +12,17 @@ type Tab = "chat" | "brief" | "team" | "files";
 export function AIWorkspace() {
   const [projects] = useData(() => api.listProjects(), [], ["projects"]);
   const [pid, setPid] = useState<string | null>(null);
+  const [fresh, setFresh] = useState<string | null>(null); // a just-created project opens on its Brief
   const [creating, setCreating] = useState(false);
   const [newTitle, setNewTitle] = useState("");
+  const [renaming, setRenaming] = useState<string | null>(null);
   useEffect(() => { if (!pid && projects?.length) setPid(projects[0].id); }, [projects, pid]);
   const project = projects?.find((p) => p.id === pid) ?? null;
 
   const create = async () => {
     try {
       const p = await api.createProject(newTitle);
+      setFresh(p.id);
       setPid(p.id);
       setCreating(false);
       setNewTitle("");
@@ -34,31 +37,52 @@ export function AIWorkspace() {
         <h1 className="pb-3 text-[22px] font-semibold">AI Workspace</h1>
         <div className="flex min-h-0 flex-1 flex-col gap-1 overflow-y-auto">
           {(projects ?? []).length === 0 && <Empty>No projects yet.</Empty>}
-          {(projects ?? []).map((p) => (
-            <button key={p.id} type="button" onClick={() => setPid(p.id)}
-              className={cx("rounded-lg px-3 py-2 text-left text-[13.5px] transition-colors duration-100",
-                p.id === pid ? "bg-panel font-semibold shadow-[0_1px_2px_rgba(0,0,0,0.06),0_0_0_1px_rgba(0,0,0,0.05)]" : "hover:bg-hover")}>
-              <span className="block truncate">{p.title}</span>
-            </button>
+          {(projects ?? []).map((p) => renaming === p.id ? (
+            <RenameField key={p.id} project={p} onDone={() => setRenaming(null)} />
+          ) : (
+            <div key={p.id} className={cx("group flex items-center rounded-lg transition-colors duration-100",
+              p.id === pid ? "bg-panel shadow-[0_1px_2px_rgba(0,0,0,0.06),0_0_0_1px_rgba(0,0,0,0.05)]" : "hover:bg-hover")}>
+              <button type="button" onClick={() => setPid(p.id)} onDoubleClick={() => setRenaming(p.id)} title="Double-click to rename"
+                className={cx("min-w-0 flex-1 truncate px-3 py-2 text-left text-[13.5px]", p.id === pid && "font-semibold")}>{p.title}</button>
+              <button type="button" aria-label={`Rename ${p.title}`} title="Rename" onClick={() => setRenaming(p.id)}
+                className={cx("mr-1 grid size-7 shrink-0 place-items-center rounded-md text-muted hover:bg-hover hover:text-ink",
+                  p.id === pid ? "opacity-100" : "opacity-0 group-hover:opacity-100 focus-visible:opacity-100")}>
+                <Pencil size={13} /></button>
+            </div>
           ))}
         </div>
         <Button className="mt-3" icon={<Plus size={15} />} onClick={() => setCreating(true)}>New project</Button>
         <Dialog open={creating} onClose={() => setCreating(false)} title="New project" width={400}
           footer={<><Button variant="ghost" onClick={() => setCreating(false)}>Cancel</Button><Button variant="primary" onClick={create}>Create</Button></>}>
-          <Field label="Title"><input className={inputCls} value={newTitle} onChange={(e) => setNewTitle(e.target.value)}
-            onKeyDown={(e) => { if (e.key === "Enter") void create(); }} placeholder="e.g. Budget tracker" /></Field>
+          <Field label="Title" hint="Next you'll describe it in the Brief, so every model knows what it's about.">
+            <input className={inputCls} value={newTitle} onChange={(e) => setNewTitle(e.target.value)}
+              onKeyDown={(e) => { if (e.key === "Enter") void create(); }} placeholder="e.g. Budget tracker" /></Field>
         </Dialog>
       </aside>
       <div className="min-w-0 flex-1">
-        {project ? <ProjectPane key={project.id} project={project} onDeleted={() => setPid(null)} /> :
+        {project ? <ProjectPane key={project.id} project={project} startOn={fresh === project.id ? "brief" : "chat"}
+          onDeleted={() => setPid(null)} /> :
           <div className="grid h-full place-items-center text-[14px] text-faint">Create a project to start.</div>}
       </div>
     </div>
   );
 }
 
-function ProjectPane({ project, onDeleted }: { project: Project; onDeleted: () => void }) {
-  const [tab, setTab] = useState<Tab>("chat");
+function RenameField({ project, onDone }: { project: Project; onDone: () => void }) {
+  const [title, setTitle] = useState(project.title);
+  const save = async () => {
+    if (title.trim() && title.trim() !== project.title) await attempt(() => api.updateProject(project.id, { title }));
+    onDone();
+  };
+  return (
+    <input autoFocus className={cx(inputCls, "h-[34px]")} value={title} maxLength={120} aria-label="Project name"
+      onChange={(e) => setTitle(e.target.value)} onBlur={() => void save()}
+      onKeyDown={(e) => { if (e.key === "Enter") void save(); if (e.key === "Escape") onDone(); }} />
+  );
+}
+
+function ProjectPane({ project, startOn, onDeleted }: { project: Project; startOn: Tab; onDeleted: () => void }) {
+  const [tab, setTab] = useState<Tab>(startOn);
   return (
     <div className="flex h-full flex-col overflow-hidden rounded-xl border border-line bg-panel">
       <div className="flex items-end gap-1 border-b border-line px-4 pt-2">
@@ -69,8 +93,13 @@ function ProjectPane({ project, onDeleted }: { project: Project; onDeleted: () =
             <span className={cx("absolute inset-x-2 -bottom-px h-[2px] rounded-full", tab === t ? "bg-accent" : "bg-transparent")} />
           </button>
         ))}
+        {tab !== "brief" && (
+          <Button size="sm" variant="ghost" className="mb-1.5 ml-auto" icon={<Pencil size={13} />} onClick={() => setTab("brief")}>
+            Edit project</Button>
+        )}
       </div>
-      {tab === "chat" && <div className="min-h-0 flex-1"><ChatTab project={project} onShowFiles={() => setTab("files")} /></div>}
+      {tab === "chat" && <div className="min-h-0 flex-1"><ChatTab project={project} onShowFiles={() => setTab("files")}
+        onEditBrief={() => setTab("brief")} /></div>}
       <div className="min-h-0 flex-1 overflow-y-auto p-5" hidden={tab === "chat"}>
         <div hidden={tab !== "brief"}><BriefTab project={project} onDeleted={onDeleted} onPlan={() => setTab("team")} /></div>
         <div hidden={tab !== "team"}><TeamTab project={project} /></div>
@@ -92,7 +121,12 @@ function BriefTab({ project, onDeleted, onPlan }: { project: Project; onDeleted:
   };
   return (
     <div className="flex max-w-[860px] flex-col gap-4" onKeyDown={(e) => { if (e.ctrlKey && e.key.toLowerCase() === "s") { e.preventDefault(); void save(); } }}>
-      <Field label="Title"><input className={inputCls} value={title} onChange={(e) => setTitle(e.target.value)} /></Field>
+      <div className="rounded-xl bg-[#fbfbfa] px-4 py-3 text-[13px] leading-relaxed text-muted">
+        <b className="font-semibold text-ink">Project details.</b> Rename the project and describe what you want. Every model in
+        Chat and Team plan reads this brief, so a clear one gets better results. Save, then use <b className="font-medium text-ink">Chat</b> for
+        quick requests or <b className="font-medium text-ink">Team plan</b> to have ChatGPT plan the whole build.
+      </div>
+      <Field label="Project name"><input className={inputCls} value={title} maxLength={120} onChange={(e) => setTitle(e.target.value)} /></Field>
       <Field label="Brief — what should be built" hint={`${brief.length} / 12000`}>
         <textarea className={textareaCls} rows={9} maxLength={12000} value={brief} onChange={(e) => setBrief(e.target.value)}
           placeholder="Describe the goal, who it's for, what done looks like." />

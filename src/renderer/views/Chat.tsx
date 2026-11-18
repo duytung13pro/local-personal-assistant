@@ -9,7 +9,7 @@ import { AGENT_LABEL, AgentBadge, Button, Dialog } from "../ui";
 const ACTIVE = new Set(["thinking", "waiting", "working"]);
 const MODE_LABEL = { self: "answered itself", planner: "used your planner (local)", single: "handed it to", split: "split the work" };
 
-export function ChatTab({ project, onShowFiles }: { project: Project; onShowFiles: () => void }) {
+export function ChatTab({ project, onShowFiles, onEditBrief }: { project: Project; onShowFiles: () => void; onEditBrief: () => void }) {
   const [messages] = useData(() => api.listChat(project.id), [project.id], ["chat", "steps"]);
   const [steps] = useData(() => api.listSteps(project.id), [project.id], ["steps", "chat"]);
   const [usage] = useData(() => api.chatUsage(), [], ["chat", "steps", "jobs"]);
@@ -78,6 +78,13 @@ export function ChatTab({ project, onShowFiles }: { project: Project; onShowFile
       <div ref={list} onScroll={(e) => { const el = e.currentTarget; atBottom.current = el.scrollHeight - el.scrollTop - el.clientHeight < 40; }}
         className="min-h-0 flex-1 overflow-y-auto px-5 py-4">
         <div className="mx-auto flex max-w-[820px] flex-col gap-4">
+          {!project.brief.trim() && (
+            <div className="flex items-center gap-3 rounded-xl border border-[#f3c9a3] bg-accent-soft px-4 py-2.5 text-[13px]">
+              <span className="flex-1 text-accent-ink">This project has no brief yet. Add one so every model knows what it's about
+                (you can still chat without it).</span>
+              <Button size="sm" variant="secondary" onClick={onEditBrief}>Edit project</Button>
+            </div>
+          )}
           {msgs.length === 0 && <Welcome onPick={(t) => { setText(t); input.current?.focus(); }} />}
           {msgs.map((m) => m.role === "user"
             ? <UserBubble key={m.id} m={m} />
@@ -88,6 +95,10 @@ export function ChatTab({ project, onShowFiles }: { project: Project; onShowFile
       <div className="border-t border-line px-5 pt-3 pb-4">
         <div className="mx-auto max-w-[820px]">
           <div className="flex flex-wrap gap-1.5 pb-2">
+            <button type="button" title="Split a big job into sub-tasks for several models at once"
+              onClick={() => { setText((t) => `@team ${t.replace(/^@[a-z-]+\s*/i, "")}`); input.current?.focus(); }}
+              className="rounded-full border border-[#f3c9a3] bg-accent-soft px-2 py-0.5 text-[11.5px] font-medium text-accent-ink transition-colors duration-100 hover:border-accent">
+              @team</button>
             {CHAT_ROUTABLE.map((w) => (
               <button key={w} type="button" onClick={() => { setText((t) => `@${WORKERS[w].mention} ${t.replace(/^@[a-z-]+\s*/i, "")}`); input.current?.focus(); }}
                 className="rounded-full border border-line px-2 py-0.5 text-[11.5px] text-muted transition-colors duration-100 hover:border-line-strong hover:text-ink">
@@ -95,9 +106,13 @@ export function ChatTab({ project, onShowFiles }: { project: Project; onShowFile
             ))}
           </div>
           <div className="flex items-end gap-2 rounded-2xl border border-line-strong bg-panel p-2 transition-[border-color,box-shadow] duration-100 focus-within:border-accent-ink focus-within:shadow-[0_0_0_3px_rgba(245,134,42,0.15)]">
-            <textarea ref={input} value={text} rows={1} maxLength={12000} placeholder="Ask the team… (Ctrl+Enter to send · @codex, @claude… to pick a model)"
+            <textarea ref={input} value={text} rows={1} maxLength={12000}
+              placeholder="Ask the team…  Enter to send · Shift+Enter for a new line · @team to split a big job"
               onChange={(e) => setText(e.target.value)}
-              onKeyDown={(e) => { if (e.key === "Enter" && e.ctrlKey) { e.preventDefault(); void send(); } }}
+              onKeyDown={(e) => {
+                // Enter sends; Shift+Enter is a new line. Never send mid-composition (Vietnamese/IME input).
+                if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) { e.preventDefault(); void send(); }
+              }}
               onInput={(e) => { const el = e.currentTarget; el.style.height = "auto"; el.style.height = `${Math.min(220, el.scrollHeight)}px`; }}
               className="max-h-[220px] min-h-[36px] flex-1 resize-none bg-transparent px-2 py-1.5 text-[14px] leading-relaxed outline-none placeholder:text-faint" />
             {active ? (
@@ -130,7 +145,8 @@ export function ChatTab({ project, onShowFiles }: { project: Project; onShowFile
 
 function Welcome({ onPick }: { onPick: (t: string) => void }) {
   const ideas = ["What's on my plate this week?", "Add a task to call the bank on Friday, high priority",
-    "Build a small HTML page that converts USD to VND", "@chatgpt Compare SQLite and Postgres for a personal app"];
+    "Build a small HTML page that converts USD to VND", "@chatgpt Compare SQLite and Postgres for a personal app",
+    "@team Build a one-page monthly budget planner: income, expense categories, a summary chart and CSV export"];
   return (
     <div className="py-10 text-center">
       <ChefHat size={28} className="mx-auto text-accent-ink" />
@@ -166,7 +182,8 @@ function Ticket({ m, steps, live, onReview, onShowFiles }: {
   const text = ACTIVE.has(m.status) && live !== undefined ? live : m.content;
   const wrote = steps.some((s) => WORKERS[s.agent].writes && s.status === "done");
   const header: ReactNode = m.status === "thinking" ? "Head chef is reading your message…"
-    : m.mode === "single" && steps[0] ? <>Head chef {MODE_LABEL.single} <AgentBadge agent={steps[0].agent} /></>
+    : m.mode === "single" && (steps[0] || WORKERS[m.author as WorkerId])
+      ? <>Head chef {MODE_LABEL.single} <AgentBadge agent={steps[0]?.agent ?? (m.author as WorkerId)} /></>
     : m.mode ? `Head chef ${MODE_LABEL[m.mode]}` : "Head chef";
   return (
     <div className="flex flex-col gap-2">

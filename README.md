@@ -14,10 +14,12 @@ A Windows desktop app for your day (planner, calendar, checklist) with a built-i
   answer itself (quick things) · use your **planner** (read/add/move/complete tasks and events, locally only; those replies
   never reach cloud models) · hand it to **one** model · or **split** it into sub-tasks that run in parallel and merge
   the results (prep on local "apprentices", the main dish on a stronger "lead"). `@codex`, `@claude`, `@chatgpt`, `@qwen`,
-  `@coder`, `@gpt-oss`, `@fast`, `@claude-chat` pick a model yourself. Every answer shows why it was routed, has
+  `@coder`, `@gpt-oss`, `@fast`, `@claude-chat` pick a model yourself; **`@team`** makes the head chef split the job
+  across several models. Enter sends, Shift+Enter adds a line. Every answer shows why it was routed, has
   "Try with…" to compare models, and a Stop button. Cloud steps wait for **Review & send**; a counter shows today's
   cloud calls. Replies stream and follow your language (English/Vietnamese). One thread per project; models see the
   last 10 messages plus a running summary kept locally. Chat sub-tasks also appear on the Team plan board.
+- **Projects** — rename with the pencil (or double-click); **Edit project** opens the Brief. New projects open on the Brief.
 - **AI Workspace → Team plan** — write a brief, then:
   1. **Plan with ChatGPT** → ChatGPT splits the brief into tasks, assigns each to a worker and sets dependencies.
   2. **Run all** → tasks run on local models; tasks that don't depend on each other run **in parallel** (default up to 3).
@@ -61,7 +63,7 @@ checklist data are never sent to any model.
 
     npm install
     npm start            # build and open the app (or double-click "Personal Assistant.cmd")
-    npm test             # 16 automated tests
+    npm test             # 18 automated tests
     npm run typecheck
     npm run shot         # render every view to data\screenshots\*.png
 

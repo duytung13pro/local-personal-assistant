@@ -5,7 +5,7 @@ import { readdir, readFile as readFileAsync, stat } from "node:fs/promises";
 import { join, resolve, relative, sep } from "node:path";
 import { Store, ValidationError } from "./db";
 import { AgentError, KEEP_ALIVE, agentStatuses, ollamaChat, ollamaPost, ollamaStream, runClaude, runClaudeChat, runCodex, runCodexEdit } from "./providers";
-import { RECENT, SUMMARY_SYSTEM, contextText, mergePrompt, parseRoute, routerPrompt, runPlanner, selfSystem, workerPrompt, type Route } from "./chat";
+import { RECENT, SUMMARY_SYSTEM, contextText, mergePrompt, parseRoute, parseTeam, routerPrompt, runPlanner, selfSystem, workerPrompt, type Route } from "./chat";
 import { runLocalCoder } from "./localcoder";
 import { goodPlan, parsePlan, parseReview, plannerPrompt, reviewPrompt, rulePlan, stepPrompt, type Draft } from "./orchestrator";
 import type { ChatMessage, ConnectionsReport, PlanResult, Project, Step, WorkerId } from "../shared/types";
@@ -326,19 +326,24 @@ async function route(project: Project, history: ChatMessage[], text: string, rep
   try {
     const t = await team();
     const avail = t.ready.filter((w) => CHAT_ROUTABLE.includes(w));
-    const [mention, body] = parseMention(text);
+    const [wantsTeam, teamBody] = parseTeam(text);
+    const [mention, body] = wantsTeam ? [null, teamBody] as const : parseMention(text);
     let r: Route | null = null;
     if (mention) {
       if (!avail.includes(mention)) throw new AgentError(`${WORKERS[mention].name} isn't available right now (see Connections).`);
       r = { mode: "single", worker: mention, reason: `You asked for ${WORKERS[mention].name}.` };
     } else if (avail.includes(CHEF)) {
-      const ans = await ollamaChat(modelOf(CHEF), "Reply with JSON only.",
-        routerPrompt(project, contextText(history, chatSummary(project.id), false), text, avail),
-        { json: true, think: false, timeoutMs: 15 * 60_000, signal: ctl.signal }); // JSON-constrained: no need to think
-      r = parseRoute(ans, avail);
+      // @team forces a split; one retry if the head chef still doesn't split. JSON-constrained, so no thinking needed.
+      for (let attemptNo = 0; attemptNo < (wantsTeam ? 2 : 1) && (!r || (wantsTeam && r.mode !== "split")); attemptNo++) {
+        const ans = await ollamaChat(modelOf(CHEF), "Reply with JSON only.",
+          routerPrompt(project, contextText(history, chatSummary(project.id), false), body, avail, wantsTeam),
+          { json: true, think: false, timeoutMs: 15 * 60_000, signal: ctl.signal });
+        r = parseRoute(ans, avail) ?? r;
+      }
+      if (wantsTeam && r && r.mode !== "split") r = { ...r, reason: `Couldn't split this one sensibly, so: ${r.reason}` };
     }
     if (!r) r = { mode: "self", reason: avail.includes(CHEF) ? "Answering directly." : "Head chef unavailable; answering with what's ready." };
-    const content = mention ? body : text;
+    const content = mention || wantsTeam ? body : text;
     store.updateChat(replyId, { mode: r.mode, reason: r.reason, status: r.mode === "self" || r.mode === "planner" ? "working" : "waiting" });
     changed("chat");
 

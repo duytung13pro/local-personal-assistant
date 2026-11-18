@@ -22,7 +22,7 @@ export function teamList(available: WorkerId[]): string {
     .map((w) => `- "${w}" (${isCloud(w) ? "cloud, needs the user's approval, uses their plan" : "local, free"}): ${WORKERS[w].role}`).join("\n");
 }
 
-export function routerPrompt(p: Project, context: string, message: string, available: WorkerId[]): string {
+export function routerPrompt(p: Project, context: string, message: string, available: WorkerId[], forceSplit = false): string {
   return `You are the head chef of a team of AI models on the user's PC. Decide how to handle the user's message.
 
 Choose exactly one mode:
@@ -39,9 +39,18 @@ Choosing workers (the lead chef cooks, apprentices prep):
 - Hard reasoning, planning, research-style questions → "chatgpt". Long or polished writing → "claude-chat" or "qwen".
 - Checking/reviewing → "gpt-oss". Quick extraction/reformatting → "qwen-fast".
 - In "split", give apprentices (local) the prep tasks and one lead (often cloud) the main dish.
+- ONLY "qwen-coder", "codex" and "claude" can create or edit files. Any task that builds, implements, writes code,
+  integrates or fixes files MUST go to one of them. "chatgpt", "qwen", "qwen-fast", "gpt-oss" and "claude-chat" only
+  produce text (specs, designs, content, checklists, reviews) that later tasks can use through "deps".
+- Prefer ONE file-writing lead for the main build (several writers editing the same files conflict); put the text
+  prep in parallel before it and a review after it.
 
 Workers available now:
 ${teamList(available)}
+${forceSplit ? `
+THE USER ASKED FOR TEAMWORK (@team): you MUST choose "split" with 3-5 tasks. Make at least two tasks independent
+(no deps between them) so they run at the same time on different workers, give the main build to the best "lead",
+and add a final check task that depends on the build.` : ""}
 
 Reply with JSON only:
 {"mode":"self|planner|single|split","reason":"one short sentence the user will see","worker":"<id, for single>",
@@ -54,6 +63,12 @@ ${context || "(none)"}
 
 # User's latest message
 ${message}`;
+}
+
+/** "@team build X" → [true, "build X"]: the user wants the job split across several models. */
+export function parseTeam(text: string): [boolean, string] {
+  const m = /^\s*@team\b[\s,:]*/i.exec(text);
+  return m ? [true, text.slice(m[0].length).trim()] : [false, text];
 }
 
 export function parseRoute(text: string, available: WorkerId[]): Route | null {
@@ -75,9 +90,19 @@ export function parseRoute(text: string, available: WorkerId[]): Route | null {
   if (mode === "split") {
     const tasks = parseTasks(d.tasks, available.filter((w) => CHAT_ROUTABLE.includes(w)));
     if (!tasks || tasks.length < 2) return null;
-    return { mode, reason, tasks: tasks.slice(0, 5) };
+    return { mode, reason, tasks: fixWriters(tasks.slice(0, 5), available) };
   }
   return null;
+}
+
+const BUILDS = /\b(build|implement|integrat\w*|cod(e|ing)|fix|refactor|write (the )?(code|files?|page|html|script)|create (the |a )?(page|files?|app|script|component))\b/i;
+
+/** A task that builds or edits files must go to a worker that can write files; move it if the head chef slipped. */
+export function fixWriters(tasks: Draft[], available: WorkerId[]): Draft[] {
+  const writer = (["qwen-coder", "codex", "claude"] as WorkerId[]).find((w) => available.includes(w));
+  if (!writer) return tasks;
+  return tasks.map((t) => (!WORKERS[t.agent].writes && BUILDS.test(t.title) ? { ...t, agent: writer,
+    why: `${t.why ? `${t.why} ` : ""}(moved to ${WORKERS[writer].name}: only file-writing models can build)`.trim() } : t));
 }
 
 /** Recent conversation as text. Cloud models never see private (planner) messages. */
