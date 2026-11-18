@@ -55,6 +55,9 @@ checklist data are never sent to any model.
     npm run typecheck
     npm run shot         # render every view to data\screenshots\*.png
 
+**Start menu / taskbar:** `npm run shortcut` adds "Local Personal Assistant" to the Start menu (add `-- --desktop`
+for a Desktop shortcut too). Right-click it > Pin to taskbar. Run it again after moving the folder.
+
 Data lives in `data\` next to the app (`PA_DATA_DIR` overrides). `PA_MAX_PARALLEL` sets how many workers run at
 once (default 3). Connections → "Import from old app" copies tasks/events/projects from the earlier tkinter
 version's database, opened read-only.

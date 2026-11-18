@@ -16,6 +16,12 @@ const OLD_DB = process.env.PA_OLD_DB || "D:/LocalAI/Workstation/workstation.db";
 const SHOT = process.argv.find((a) => a.startsWith("--screenshot"));
 const MAX_PARALLEL = Number(process.env.PA_MAX_PARALLEL || 3); // workers running at the same time
 
+/** Same ID as the Start menu shortcut (scripts/create-shortcut.js), so Windows groups the running window
+ * with a pinned taskbar icon instead of showing two icons. */
+export const APP_ID = "Duytung.LocalPersonalAssistant";
+app.setAppUserModelId(APP_ID);
+const ICON = join(ROOT, "build", "icon.ico");
+
 mkdirSync(join(DATA, "projects"), { recursive: true });
 if (!SHOT && !app.requestSingleInstanceLock()) app.quit();
 
@@ -317,7 +323,7 @@ function createWindow() {
   const b = SHOT ? { width: 1440, height: 900 } : savedBounds() ?? { width: 1360, height: 860 };
   win = new BrowserWindow({
     ...b, minWidth: 900, minHeight: 600, show: false, backgroundColor: "#f6f6f4",
-    title: "Personal Assistant", autoHideMenuBar: true,
+    title: "Personal Assistant", autoHideMenuBar: true, ...(existsSync(ICON) ? { icon: ICON } : {}),
     webPreferences: { preload: join(__dirname, "preload.js"), contextIsolation: true, sandbox: true, nodeIntegration: false },
   });
   win.webContents.setWindowOpenHandler(() => ({ action: "deny" }));

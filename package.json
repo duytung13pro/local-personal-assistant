@@ -13,7 +13,9 @@
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "test": "node scripts/test.mjs",
     "start": "npm run build && electron .",
-    "shot": "npm run build && electron . --screenshot"
+    "shot": "npm run build && electron . --screenshot",
+    "icon": "electron scripts/make-icon.js",
+    "shortcut": "npm run build && electron scripts/create-shortcut.js"
   },
   "devDependencies": {
     "@tailwindcss/vite": "^4.3.5",
