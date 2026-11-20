@@ -35,7 +35,7 @@ A Windows desktop app for your day (planner, calendar, checklist) with a built-i
 | **ChatGPT** | your ChatGPT plan via the Codex CLI | Team plan: plans and reviews. Chat: hard questions | cloud, read-only, you approve each send |
 | **Qwen Coder** | `qwen3-coder:30b` | writes and edits files in the project folder | local |
 | **Qwen** | `qwen3:30b` | specs, drafts, reasoning about sub-problems | local |
-| **Qwen Fast** | `qwen3:4b` | extraction, reformatting, short summaries | local |
+| **Qwen Fast** | `qwen3:4b-instruct` | extraction, reformatting, short summaries | local |
 | **GPT-OSS** | `gpt-oss:20b` | second opinions, checking logic and text | local |
 | **Codex** | your ChatGPT plan via the Codex CLI | multi-file code changes in the project folder | cloud, sandboxed, you approve each send |
 | **Claude Code** | your Claude Pro via Claude Code | larger builds and UI work in the project folder | cloud, you approve each send |
@@ -53,7 +53,7 @@ checklist data are never sent to any model.
 
 - Windows 10/11, [Node.js](https://nodejs.org) 22+ (24 recommended)
 - [Ollama](https://ollama.com) with the models you want:
-  `ollama pull qwen3-coder:30b`, `ollama pull qwen3:30b`, `ollama pull qwen3:4b`, `ollama pull gpt-oss:20b`
+  `ollama pull qwen3-coder:30b`, `ollama pull qwen3:30b`, `ollama pull qwen3:4b-instruct`, `ollama pull gpt-oss:20b`
   (about 52 GB together; the 30B models need ~20 GB of memory each while loaded)
 - For ChatGPT planning: the ChatGPT **Codex** app or `npm install -g @openai/codex`, signed in with `codex login`
   (the app also finds the copy bundled with the Codex desktop app)

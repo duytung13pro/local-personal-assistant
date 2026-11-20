@@ -285,6 +285,7 @@ test("chat: the worker reads the conversation first and the current request last
 
 test("providers: qwen3 text models always think in a separate field (no leaked reasoning)", () => {
   assert.deepEqual(thinkOption("qwen3:4b"), { think: true });
+  assert.deepEqual(thinkOption("qwen3:4b-instruct"), {}, "Qwen Fast's instruct model answers directly");
   assert.deepEqual(thinkOption("qwen3:30b"), { think: true });
   assert.deepEqual(thinkOption("qwen3-coder:30b"), {});
   assert.deepEqual(thinkOption("gpt-oss:20b"), {});

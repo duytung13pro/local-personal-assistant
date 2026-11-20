@@ -29,7 +29,7 @@ export const WORKERS: Record<WorkerId, WorkerDef> = {
     role: "Local coding agent (list/read/write file tools only): small or medium code and file edits in the project folder." },
   qwen: { id: "qwen", name: "Qwen", model: "qwen3:30b", local: true, writes: false, mention: "qwen",
     role: "Local general worker: drafting, explaining, specs, outlines, reasoning about a sub-problem." },
-  "qwen-fast": { id: "qwen-fast", name: "Qwen Fast", model: "qwen3:4b", local: true, writes: false, mention: "fast",
+  "qwen-fast": { id: "qwen-fast", name: "Qwen Fast", model: "qwen3:4b-instruct", local: true, writes: false, mention: "fast",
     role: "Local and very fast: extract, classify, reformat, short summaries, checklists. Not for reasoning or code." },
   "gpt-oss": { id: "gpt-oss", name: "GPT-OSS", model: "gpt-oss:20b", local: true, writes: false, mention: "gpt-oss",
     role: "Local reasoning model: second opinions, checking logic, reviewing text or a design for mistakes." },

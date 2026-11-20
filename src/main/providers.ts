@@ -110,7 +110,7 @@ export async function loadedModels(): Promise<string[]> {
  * think ("Okay, let me tackle this…"), so always let them think in Ollama's separate `thinking` field and keep only
  * the answer. JSON-constrained calls (routing) may still pass think:false explicitly. */
 export function thinkOption(model: string): { think?: boolean } {
-  return /^qwen3(?!-coder)/i.test(model) ? { think: true } : {};
+  return /^qwen3(?!-coder)/i.test(model) && !/instruct/i.test(model) ? { think: true } : {}; // instruct = never thinks
 }
 
 /** Keep worker models in memory between tasks: loading an 18 GB model from disk can take minutes. */
