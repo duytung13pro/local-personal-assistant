@@ -245,12 +245,37 @@ function Ticket({ m, steps, live, onReview, onShowFiles }: {
   );
 }
 
-/** Minimal Markdown: fenced code blocks, inline code, **bold**, headings and bullet lines. */
+/** Minimal Markdown: fenced code blocks, inline code, **bold**, headings, bullet lines and tables. */
 function Rich({ text }: { text: string }) {
   const parts = text.split(/```[a-zA-Z0-9-]*\n?/);
   return <>{parts.map((p, i) => i % 2 === 1
     ? <pre key={i} className="my-2 overflow-x-auto rounded-lg border border-line bg-[#fafaf8] p-3 font-mono text-[12.5px]">{p.replace(/\n$/, "")}</pre>
-    : <div key={i} className="whitespace-pre-wrap">{p.split("\n").map((line, j) => <Line key={j} line={line} />)}</div>)}</>;
+    : <div key={i} className="whitespace-pre-wrap">{blocks(p.split("\n"))}</div>)}</>;
+}
+
+const isRow = (l: string) => /^\s*\|.*\|\s*$/.test(l);
+const cells = (l: string) => l.trim().replace(/^\||\|$/g, "").split("|").map((c) => c.trim());
+
+/** Lines → elements, turning runs of `| a | b |` lines into a real table. */
+function blocks(lines: string[]): ReactNode[] {
+  const out: ReactNode[] = [];
+  for (let j = 0; j < lines.length; j++) {
+    if (isRow(lines[j]) && j + 1 < lines.length && /^\s*\|[\s:|-]+\|\s*$/.test(lines[j + 1])) {
+      const head = cells(lines[j]);
+      const rows: string[][] = [];
+      j += 2;
+      while (j < lines.length && isRow(lines[j])) rows.push(cells(lines[j++]));
+      j--;
+      out.push(
+        <div key={j} className="my-2 overflow-x-auto whitespace-normal">
+          <table className="border-collapse text-[13px]">
+            <thead><tr>{head.map((c, k) => <th key={k} className="border-b border-line px-2.5 py-1.5 text-left font-semibold">{inline(c)}</th>)}</tr></thead>
+            <tbody>{rows.map((r, k) => <tr key={k}>{r.map((c, n) => <td key={n} className="border-b border-line/60 px-2.5 py-1.5 align-top">{inline(c)}</td>)}</tr>)}</tbody>
+          </table>
+        </div>);
+    } else out.push(<Line key={j} line={lines[j]} />);
+  }
+  return out;
 }
 
 function Line({ line }: { line: string }) {
@@ -262,7 +287,8 @@ function Line({ line }: { line: string }) {
 }
 
 function inline(s: string): ReactNode[] {
-  return s.split(/(`[^`]+`|\*\*[^*]+\*\*)/g).map((t, i) =>
+  return s.split(/(`[^`]+`|\*\*[^*]+\*\*|\*[^*\s][^*]*\*)/g).map((t, i) =>
     t.startsWith("`") && t.endsWith("`") && t.length > 1 ? <code key={i} className="rounded bg-[#f0f0ed] px-1 font-mono text-[12.5px]">{t.slice(1, -1)}</code>
-      : t.startsWith("**") && t.endsWith("**") && t.length > 4 ? <b key={i} className="font-semibold">{t.slice(2, -2)}</b> : t);
+      : t.startsWith("**") && t.endsWith("**") && t.length > 4 ? <b key={i} className="font-semibold">{t.slice(2, -2)}</b>
+      : t.startsWith("*") && t.endsWith("*") && t.length > 2 ? <i key={i}>{t.slice(1, -1)}</i> : t);
 }

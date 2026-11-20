@@ -9,7 +9,7 @@ import { Store, ValidationError } from "../src/main/db";
 import { goodPlan, parsePlan, parseReview, rulePlan, stepPrompt, waves } from "../src/main/orchestrator";
 import { matches } from "../src/shared/filters";
 import { parseMention } from "../src/shared/workers";
-import { contextText, fixWriters, parseRoute, parseTeam, runPlannerTool } from "../src/main/chat";
+import { chainWriters, contextText, fixWriters, parseRoute, parseTeam, runPlannerTool } from "../src/main/chat";
 
 const dir = () => mkdtempSync(join(process.env.PA_TEST_TMP ?? tmpdir(), "pa-test-"));
 
@@ -261,4 +261,24 @@ test("chat: build tasks given to text-only models are moved to a file-writing wo
   assert.deepEqual(fixed.map((t) => t.agent), ["qwen-coder", "qwen", "qwen-coder", "qwen"],
     "a text review/merge stays with a text model");
   assert.deepEqual(fixWriters([d("Build it", "qwen")], ["qwen"]).map((t) => t.agent), ["qwen"], "no writer available: unchanged");
+});
+
+test("chat: file-writing tasks are chained and a review waits for the build, prep stays parallel", () => {
+  const t = (ref: string, title: string, agent: "qwen-coder" | "qwen" | "gpt-oss", deps: string[] = []) =>
+    ({ ref, title, agent, why: "", prompt: "", deps });
+  const out = chainWriters([t("t1", "Design the HTML", "qwen-coder"), t("t2", "Write the copy", "qwen"),
+    t("t3", "Add the CSS", "qwen-coder"), t("t4", "Add the JS", "qwen-coder", ["t2"]), t("t5", "Review and test", "gpt-oss")]);
+  assert.deepEqual(out.map((x) => x.deps), [[], [], ["t1"], ["t2", "t3"], ["t4"]]);
+});
+
+test("worker prompt: a text-only reviewer after a build gets the real files; writers are told to read first", () => {
+  const p = { id: "p", title: "Budget", brief: "", notes: "" } as never;
+  const step = (id: string, agent: "qwen-coder" | "gpt-oss", deps: string[] = []) =>
+    ({ id, projectId: "p", idx: 0, title: id, agent, why: "", prompt: "do it", status: "done" as const, output: "ok", updated: "", deps, chatMsg: "" });
+  const build = step("build", "qwen-coder");
+  const review = step("review", "gpt-oss", ["build"]);
+  const files = "### index.html\n<h1>Hi</h1>";
+  assert.match(stepPrompt(p, [build, review], review, files), /Current project files[\s\S]*<h1>Hi<\/h1>/);
+  assert.doesNotMatch(stepPrompt(p, [build, review], step("solo", "gpt-oss"), files), /Current project files/);
+  assert.match(stepPrompt(p, [build], build, files), /First list and read the files/);
 });

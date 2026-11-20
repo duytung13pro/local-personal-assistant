@@ -92,7 +92,7 @@ export function parseRoute(text: string, available: WorkerId[]): Route | null {
   if (mode === "split") {
     const tasks = parseTasks(d.tasks, available.filter((w) => CHAT_ROUTABLE.includes(w)));
     if (!tasks || tasks.length < 2) return null;
-    return { mode, reason, tasks: fixWriters(tasks.slice(0, 5), available) };
+    return { mode, reason, tasks: chainWriters(fixWriters(tasks.slice(0, 5), available)) };
   }
   return null;
 }
@@ -105,6 +105,22 @@ export function fixWriters(tasks: Draft[], available: WorkerId[]): Draft[] {
   if (!writer) return tasks;
   return tasks.map((t) => (!WORKERS[t.agent].writes && BUILDS.test(t.title) ? { ...t, agent: writer,
     why: `${t.why ? `${t.why} ` : ""}(moved to ${WORKERS[writer].name}: only file-writing models can build)`.trim() } : t));
+}
+
+/** File-writing tasks in one project run one after another, so each must build on the previous one's files
+ * (otherwise e.g. the CSS task invents class names the HTML task never used). Make every writer task depend on
+ * the writer task before it, and a review/check task listed after a writer that depends on nothing wait for it. */
+export function chainWriters(tasks: Draft[]): Draft[] {
+  let lastWriter = "";
+  return tasks.map((t, i) => {
+    const ref = t.ref ?? `t${i + 1}`;
+    const deps = [...(t.deps ?? [])];
+    const writes = WORKERS[t.agent].writes;
+    const checks = deps.length === 0 && /\b(review|check|test|verify|audit|qa)\w*/i.test(t.title);
+    if (lastWriter && !deps.includes(lastWriter) && (writes || checks)) deps.push(lastWriter);
+    if (writes) lastWriter = ref;
+    return { ...t, ref, deps };
+  });
 }
 
 /** Recent conversation as text. Cloud models never see private (planner) messages. */
@@ -129,6 +145,8 @@ export function mergePrompt(request: string, parts: { title: string; worker: Wor
 
 Your team worked on it in parts. Combine their results into one clear answer for the user: what was done,
 the key results, any files created, and anything that failed or still needs the user. Do not invent results.
+Nothing was run or tested: never say a feature "works" or mark it ✅ unless a task's output shows it was checked
+against the actual files. If a review found problems, list them plainly as open issues. Avoid Markdown tables.
 ${LANG}
 
 ${parts.map((x) => `### ${x.title} (${WORKERS[x.worker].name}, ${x.status})\n${x.output.trim().slice(0, 8000) || "(no output)"}`).join("\n\n")}`;

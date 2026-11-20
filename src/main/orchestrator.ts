@@ -137,16 +137,22 @@ export function rulePlan(available: WorkerId[]): Draft[] {
 }
 
 /** What a worker receives: the project, the results of the tasks it depends on, and its own task. */
-export function stepPrompt(p: Project, steps: Step[], step: Step): string {
+export function stepPrompt(p: Project, steps: Step[], step: Step, files = ""): string {
   const deps = steps.filter((s) => step.deps.includes(s.id) && s.status === "done" && s.output.trim());
   const writes = WORKERS[step.agent].writes;
+  // A text-only model can't open files, so after a build it gets the files themselves, not just the builder's summary.
+  const afterBuild = !writes && deps.some((s) => WORKERS[s.agent].writes);
   const parts = [
     `# Project: ${p.title}`,
     `## Brief\n${p.brief.trim() || "(no brief)"}`,
     p.notes.trim() ? `## Notes\n${p.notes.trim()}` : "",
     ...deps.map((s) => `## Result of "${s.title}" (${WORKERS[s.agent].name})\n${s.output.trim().slice(0, 12000)}`),
+    afterBuild && files ? `## Current project files (read these; judge only what is actually in them)\n${files}` : "",
     `## Your task: ${step.title}\n${step.prompt.trim()}`,
-    writes ? "Create and edit files only inside the current folder. Do not run or install anything. When finished, list the files you changed and what each does."
+    writes ? "Create and edit files only inside the current folder. Do not run or install anything. First list and read the files " +
+      "already there and stay consistent with them (same names, ids, classes; link new CSS/JS files from the HTML). " +
+      "When finished, list the files you changed and what each does."
+      : afterBuild ? "Answer in Markdown. Be concrete and brief. Quote the file and line for each problem; do not report problems the files above don't have."
       : "Answer in Markdown. Be concrete and brief.",
   ];
   return parts.filter(Boolean).join("\n\n");

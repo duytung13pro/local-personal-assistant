@@ -101,9 +101,9 @@ handle("deleteStep", (id) => {
   if (running.has(id)) throw new ValidationError("That step is running; wait for it to finish.");
   store.deleteStep(id);
 }, "steps");
-handle("previewStep", (id) => {
+handle("previewStep", async (id) => {
   const step = store.getStep(id);
-  return stepPrompt(store.getProject(step.projectId), store.listSteps(step.projectId), step);
+  return stepPrompt(store.getProject(step.projectId), store.listSteps(step.projectId), step, await filesText(step.projectId));
 });
 
 // ---- the team: settings and availability -----------------------------------------------------------
@@ -136,6 +136,21 @@ async function listFilesOf(pid: string): Promise<string[]> {
   };
   await walk(base);
   return out.sort();
+}
+
+const TEXT_FILE = /\.(html?|css|js|mjs|ts|tsx|jsx|json|md|txt|py|csv|svg|xml|ya?ml|toml|ini|sh|ps1|bat)$/i;
+/** The project's text files, inlined (capped) for a text-only reviewer that can't open files itself. */
+async function filesText(pid: string, max = 40000): Promise<string> {
+  const base = projectDir(pid);
+  const out: string[] = [];
+  let left = max;
+  for (const f of await listFilesOf(pid)) {
+    if (!TEXT_FILE.test(f) || left <= 0) continue;
+    const body = (await readFileAsync(join(base, f), "utf8").catch(() => "")).slice(0, left);
+    left -= body.length;
+    out.push(`### ${f}\n\`\`\`\n${body}\n\`\`\``);
+  }
+  return out.join("\n\n");
 }
 
 /** Ask ChatGPT (or, without it, the strongest local model) for JSON. Returns [text, who answered]. */
@@ -234,7 +249,6 @@ function pump() {
 
 function start(step: Step, siblings: Step[]) {
   const project = store.getProject(step.projectId);
-  const prompt = stepPrompt(project, siblings, step);
   const folder = projectDir(project.id);
   const abort = new AbortController();
   running.set(step.id, { projectId: project.id, writes: WORKERS[step.agent].writes, abort });
@@ -251,6 +265,7 @@ function start(step: Step, siblings: Step[]) {
     try {
       if (step.agent !== "chatgpt" && !enabledOf(step.agent))
         throw new AgentError(`${WORKERS[step.agent].name} is turned off in Connections.`);
+      const prompt = stepPrompt(project, siblings, step, WORKERS[step.agent].writes ? "" : await filesText(project.id));
       const last = join(DATA, `codex-last-${job.id}.txt`);
       const sig = abort.signal;
       const system = "You are a careful worker on the user's own PC. Answer in Markdown.";
