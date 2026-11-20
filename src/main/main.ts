@@ -4,7 +4,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync, renameSync } from "
 import { readdir, readFile as readFileAsync, stat } from "node:fs/promises";
 import { join, resolve, relative, sep } from "node:path";
 import { Store, ValidationError } from "./db";
-import { AgentError, KEEP_ALIVE, agentStatuses, ollamaChat, ollamaPost, ollamaStream, runClaude, runClaudeChat, runCodex, runCodexEdit } from "./providers";
+import { AgentError, KEEP_ALIVE, NUM_CTX, agentStatuses, ollamaChat, ollamaPost, ollamaStream, runClaude, runClaudeChat, runCodex, runCodexEdit } from "./providers";
 import { RECENT, SUMMARY_SYSTEM, cleanSummary, contextText, mergePrompt, parseRoute, parseTeam, routerPrompt, runPlanner, selfSystem, workerPrompt, type Route } from "./chat";
 import { runLocalCoder } from "./localcoder";
 import { goodPlan, parsePlan, parseReview, plannerPrompt, reviewPrompt, rulePlan, stepPrompt, type Draft } from "./orchestrator";
@@ -499,7 +499,7 @@ handle("warmUp", async () => {
   const models = [...new Set((["qwen-coder", "qwen", "gpt-oss", "qwen-fast"] as WorkerId[]).filter(enabledOf).map(modelOf))];
   (async () => {
     for (const model of models) {
-      try { await ollamaPost("/api/generate", { model, keep_alive: KEEP_ALIVE }, 15 * 60_000); } catch { /* reported by Connections */ }
+      try { await ollamaPost("/api/generate", { model, keep_alive: KEEP_ALIVE, options: { num_ctx: NUM_CTX } }, 15 * 60_000); } catch { /* reported by Connections */ }
       changed("settings");
     }
     warming = false;

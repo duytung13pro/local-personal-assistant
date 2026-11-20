@@ -8,7 +8,7 @@ import { CHAT_ROUTABLE, WORKERS, isCloud, isWorker } from "../shared/workers";
 import { parseTasks, type Draft } from "./orchestrator";
 import { addDays, isValidDate, today } from "../shared/dates";
 import type { Store } from "./db";
-import { AgentError, KEEP_ALIVE, ollamaPost } from "./providers";
+import { AgentError, KEEP_ALIVE, NUM_CTX, ollamaPost } from "./providers";
 import { textToolCalls } from "./localcoder";
 
 export const RECENT = 10;
@@ -276,7 +276,7 @@ After making changes, say exactly what you changed. Dates are YYYY-MM-DD, times 
   for (let turn = 0; turn < 12; turn++) {
     if (signal?.aborted) throw new AgentError("Stopped.");
     const { message: msg } = await ollamaPost<{ message: Msg }>("/api/chat", { model, messages, tools: PLANNER_TOOLS, stream: false,
-      keep_alive: KEEP_ALIVE, think: true, options: { temperature: 0.1 } }, 10 * 60_000, signal);
+      keep_alive: KEEP_ALIVE, think: true, options: { temperature: 0.1, num_ctx: NUM_CTX } }, 10 * 60_000, signal);
     if (!msg.tool_calls?.length) {
       const recovered = textToolCalls(msg.content ?? "");
       if (recovered.length) msg.tool_calls = recovered;

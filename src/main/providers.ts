@@ -116,6 +116,12 @@ export function thinkOption(model: string): { think?: boolean } {
 /** Keep worker models in memory between tasks: loading an 18 GB model from disk can take minutes. */
 export const KEEP_ALIVE = "30m";
 
+/** Context window for every local call. Without it Ollama uses its own default, which on this PC was the model's
+ * maximum (262,144 tokens): qwen3:4b then took 41 GB and models evicted each other. 32K fits our longest prompts
+ * (inlined project files + thinking). Every call, warm-up included, must send the SAME value: a different num_ctx
+ * makes Ollama reload the model. */
+export const NUM_CTX = 32768;
+
 /** POST JSON to Ollama with node:http. (fetch gives up after 5 minutes without response headers, and
  * Ollama sends none while it loads a large model, which can take longer than that.) */
 export function ollamaPost<T>(path: string, body: unknown, timeoutMs: number, signal?: AbortSignal): Promise<T> {
@@ -151,7 +157,7 @@ export async function ollamaChat(model: string, system: string, user: string,
   const think = opts.think === undefined ? thinkOption(model) : /^qwen3(?!-coder)/i.test(model) ? { think: opts.think } : {};
   const j = await ollamaPost<{ message?: { content?: string } }>("/api/chat", {
     model, stream: false, keep_alive: KEEP_ALIVE, ...think, ...(opts.json ? { format: "json" } : {}),
-    options: { temperature: 0.2 },
+    options: { temperature: 0.2, num_ctx: NUM_CTX },
     messages: [{ role: "system", content: system }, { role: "user", content: user }],
   }, opts.timeoutMs ?? JOB_TIMEOUT_MS, opts.signal);
   return (j.message?.content ?? "").replace(/<think>[\s\S]*?<\/think>/g, "").trim();
@@ -161,7 +167,7 @@ export async function ollamaChat(model: string, system: string, user: string,
 export function ollamaStream(model: string, system: string, user: string, onText: (soFar: string) => void,
   opts: { timeoutMs?: number; signal?: AbortSignal } = {}): Promise<string> {
   const data = Buffer.from(JSON.stringify({ model, stream: true, keep_alive: KEEP_ALIVE, ...thinkOption(model),
-    options: { temperature: 0.3 }, messages: [{ role: "system", content: system }, { role: "user", content: user }] }));
+    options: { temperature: 0.3, num_ctx: NUM_CTX }, messages: [{ role: "system", content: system }, { role: "user", content: user }] }));
   const timeoutMs = opts.timeoutMs ?? JOB_TIMEOUT_MS;
   return new Promise((resolveP, reject) => {
     if (opts.signal?.aborted) return reject(new AgentError("Stopped."));

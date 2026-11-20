@@ -3,7 +3,7 @@
 // network and no way to run code. (Codex's own --oss mode hangs with the current Codex build on Windows.)
 import { lstat, mkdir, readFile, readdir, writeFile } from "node:fs/promises";
 import { dirname, join, relative, resolve, sep } from "node:path";
-import { AgentError, KEEP_ALIVE, ollamaPost } from "./providers";
+import { AgentError, KEEP_ALIVE, NUM_CTX, ollamaPost } from "./providers";
 
 const MAX_TURNS = 30;
 const MAX_FILE = 300_000;
@@ -115,7 +115,7 @@ export async function runLocalCoder(model: string, prompt: string, folder: strin
     if (left <= 0) throw new AgentError("Timed out.");
     if (signal?.aborted) throw new AgentError("Stopped.");
     const { message: msg } = await ollamaPost<{ message: Msg }>("/api/chat", { model, messages, tools: TOOLS, stream: false,
-      keep_alive: KEEP_ALIVE, options: { temperature: 0.2, num_ctx: 32768 } }, left, signal);
+      keep_alive: KEEP_ALIVE, options: { temperature: 0.2, num_ctx: NUM_CTX } }, left, signal);
     if (!msg.tool_calls?.length) {
       const recovered = textToolCalls(msg.content ?? "");
       if (recovered.length) msg.tool_calls = recovered;
