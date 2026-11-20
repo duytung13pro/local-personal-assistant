@@ -9,7 +9,8 @@ import { Store, ValidationError } from "../src/main/db";
 import { goodPlan, parsePlan, parseReview, rulePlan, stepPrompt, waves } from "../src/main/orchestrator";
 import { matches } from "../src/shared/filters";
 import { parseMention } from "../src/shared/workers";
-import { chainWriters, cleanSummary, routerPrompt, contextText, fixWriters, parseRoute, parseTeam, runPlannerTool } from "../src/main/chat";
+import { chainWriters, cleanSummary, routerPrompt, contextText, fixWriters, parseRoute, parseTeam, runPlannerTool, workerPrompt } from "../src/main/chat";
+import { thinkOption } from "../src/main/providers";
 
 const dir = () => mkdtempSync(join(process.env.PA_TEST_TMP ?? tmpdir(), "pa-test-"));
 
@@ -273,6 +274,34 @@ test("chat: leaked thinking never becomes the summary; cloud gets a short window
   assert.doesNotMatch(cloud, /summarised|m4\b/);
   assert.match(cloud, /m5[\s\S]*m8/);
   assert.match(contextText(all as never, "User is building a budget planner.", false), /summarised/);
+});
+
+test("chat: the worker reads the conversation first and the current request last", () => {
+  const p = workerPrompt("Translate these into Vietnamese", "User: Compare 3 approaches to syncing…");
+  assert.ok(p.indexOf("Compare 3 approaches") < p.indexOf("Translate these"), "request comes after the old messages");
+  assert.match(p, /do NOT answer these messages[\s\S]*answer THIS\)\nTranslate these/);
+  assert.match(p, /unless the request asks for another language/);
+});
+
+test("providers: qwen3 text models always think in a separate field (no leaked reasoning)", () => {
+  assert.deepEqual(thinkOption("qwen3:4b"), { think: true });
+  assert.deepEqual(thinkOption("qwen3:30b"), { think: true });
+  assert.deepEqual(thinkOption("qwen3-coder:30b"), {});
+  assert.deepEqual(thinkOption("gpt-oss:20b"), {});
+});
+
+test("chat: a new reply's tasks are only its own, never an older reply's finished tasks", () => {
+  const s = new Store(join(dir(), "x.db"));
+  try {
+    const p = s.createProject("P");
+    const old = s.addChat({ projectId: p.id, role: "assistant", author: "qwen-coder", status: "done", mode: "split", reason: "", replyTo: "" });
+    s.replaceSteps(p.id, [{ title: "Old build", agent: "qwen-coder", why: "", prompt: "" }], true, old.id);
+    s.updateStep(s.stepsOfChat(old.id)[0].id, { status: "done", output: "built" });
+    const next = s.addChat({ projectId: p.id, role: "assistant", author: "qwen-fast", status: "waiting", mode: "single", reason: "", replyTo: "" });
+    s.replaceSteps(p.id, [{ title: "Translate", agent: "qwen-fast", why: "", prompt: "" }], true, next.id);
+    assert.deepEqual(s.stepsOfChat(next.id).map((x) => x.title), ["Translate"]);
+    assert.equal(s.stepsOfChat(old.id)[0].status, "done");
+  } finally { s.close(); }
 });
 
 test("chat: router is told that questions merely mentioning calendars are not planner work", () => {

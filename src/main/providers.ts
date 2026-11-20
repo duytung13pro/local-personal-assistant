@@ -106,11 +106,11 @@ export async function loadedModels(): Promise<string[]> {
   }
 }
 
-/** Thinking models (qwen3:30b) leak their reasoning into the answer when told not to think, so let them think
- * in Ollama's separate `thinking` field and keep only the answer. Small models skip thinking for speed. */
+/** Qwen3 thinking models (qwen3:30b, and the 2507 qwen3:4b) leak their reasoning into the answer when told not to
+ * think ("Okay, let me tackle this…"), so always let them think in Ollama's separate `thinking` field and keep only
+ * the answer. JSON-constrained calls (routing) may still pass think:false explicitly. */
 export function thinkOption(model: string): { think?: boolean } {
-  if (!/^qwen3(?!-coder)/i.test(model)) return {};
-  return /:(0\.6|1\.7|4)b/i.test(model) ? { think: false } : { think: true };
+  return /^qwen3(?!-coder)/i.test(model) ? { think: true } : {};
 }
 
 /** Keep worker models in memory between tasks: loading an 18 GB model from disk can take minutes. */

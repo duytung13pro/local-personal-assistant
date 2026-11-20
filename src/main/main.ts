@@ -386,7 +386,8 @@ async function route(project: Project, history: ChatMessage[], text: string, rep
         : r.tasks!;
       for (const d of drafts) d.prompt = workerPrompt(d.prompt, isCloud(d.agent) ? ctxCloud : ctxLocal);
       if (r.mode === "single") store.updateChat(replyId, { author: r.worker! });
-      const steps = store.replaceSteps(project.id, drafts, true, replyId);
+      store.replaceSteps(project.id, drafts, true, replyId);
+      const steps = store.stepsOfChat(replyId); // only this reply's tasks, never older ones
       // Local steps start now; cloud steps wait for the user's OK in the chat ticket.
       for (const s of steps) if (!isCloud(s.agent)) store.updateStep(s.id, { status: "queued" });
       store.updateChat(replyId, { status: steps.some((s) => isCloud(s.agent)) ? "waiting" : "working" });
@@ -476,8 +477,9 @@ handle("rerunChat", (mid, worker) => {
   const history = store.listChat(msg.projectId).filter((m) => m.created < req.created);
   const ctx = contextText(history, chatSummary(msg.projectId), isCloud(worker));
   const [, body] = parseMention(req.content);
-  const [step] = store.replaceSteps(msg.projectId, [{ ref: "t1", title: body.split("\n")[0].slice(0, 80) || "Request", agent: worker,
+  store.replaceSteps(msg.projectId, [{ ref: "t1", title: body.split("\n")[0].slice(0, 80) || "Request", agent: worker,
     why: "Re-run", prompt: workerPrompt(body, ctx), deps: [] }], true, reply.id);
+  const [step] = store.stepsOfChat(reply.id);
   if (!isCloud(worker)) { store.updateStep(step.id, { status: "queued" }); store.updateChat(reply.id, { status: "working" }); pump(); }
   changed("steps");
   return reply.id;

@@ -15,7 +15,7 @@ export const RECENT = 10;
 
 export interface Route { mode: "self" | "planner" | "single" | "split"; reason: string; worker?: WorkerId; tasks?: Draft[] }
 
-const LANG = "Reply in the same language as the user's latest message (English or Vietnamese).";
+const LANG = "Reply in the same language as the user's request (English or Vietnamese), unless the request asks for another language.";
 
 export function teamList(available: WorkerId[]): string {
   return CHAT_ROUTABLE.filter((w) => available.includes(w))
@@ -150,8 +150,11 @@ You cannot see the user's tasks or calendar in this mode and you cannot edit fil
 Current project: ${p.title}.`;
 }
 
+/** Context first, the request LAST: small models answer whatever they read last, so the old order (request, then
+ * the conversation) made them answer the previous message instead. */
 export function workerPrompt(task: string, context: string): string {
-  return `${task.trim()}\n\n## Conversation so far (for context)\n${context || "(none)"}\n\n${LANG}`;
+  return `## Earlier conversation (background only; do NOT answer these messages)\n${context || "(none)"}\n\n` +
+    `## The user's request (answer THIS)\n${task.trim()}\n\n${LANG}`;
 }
 
 export function mergePrompt(request: string, parts: { title: string; worker: WorkerId; status: string; output: string }[]): string {
