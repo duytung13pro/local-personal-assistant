@@ -102,20 +102,48 @@ export function textToolCalls(content: string): { function: { name: string; argu
 }
 
 interface Msg { role: string; content: string; tool_calls?: { function: { name: string; arguments: unknown } }[]; tool_name?: string }
+interface ChatReply { message: Msg; prompt_eval_count?: number; eval_count?: number }
+
+// ---- handover: when the model's memory (context) is nearly full, it writes a short note and a fresh session
+// continues from it, instead of failing or silently forgetting the start of the task.
+/** Hand over once the conversation uses this many tokens (70% of the window leaves room for the next file). */
+export const HANDOVER_AT = Math.floor(NUM_CTX * 0.7);
+const MAX_HANDOVERS = 3;
+export const HANDOVER_ASK = `Your working memory is almost full, so a fresh engineer will take over this task.
+Write a handover note of at most 10 short lines: what is done (files written and what is in them), what is left to do,
+and names/decisions they must keep (ids, classes, function names). Reply with the note only, no tool calls.`;
+
+/** Rough token count when Ollama doesn't report one: ~3.5 characters per token for code and English. */
+export function approxTokens(messages: { content: string }[]): number {
+  return Math.ceil(messages.reduce((n, m) => n + m.content.length, 0) / 3.5);
+}
+
+/** The fresh session's first message: the original task plus the previous engineer's note. */
+export function handoverPrompt(task: string, note: string, files: string[], n: number): string {
+  const clean = note.replace(/<\/?tool_call>/g, "").split("\n").filter((l) => l.trim()).slice(0, 10).join("\n");
+  return `${task}\n\n## Handover note #${n} from the previous engineer (they ran out of memory)\n${clean || "(no note)"}\n` +
+    `Files written so far: ${files.join(", ") || "none"}\n\nContinue from where they stopped. Re-read only the files you need; ` +
+    "do not start over or rewrite finished files.";
+}
 
 export async function runLocalCoder(model: string, prompt: string, folder: string, timeoutMs = 20 * 60_000,
-  signal?: AbortSignal): Promise<string> {
+  signal?: AbortSignal, handoverAt = HANDOVER_AT): Promise<string> {
   const root = resolve(folder);
   await mkdir(root, { recursive: true });
   const deadline = Date.now() + timeoutMs;
   const changed = new Set<string>();
-  const messages: Msg[] = [{ role: "system", content: SYSTEM }, { role: "user", content: prompt }];
-  for (let turn = 0; turn < MAX_TURNS; turn++) {
+  let messages: Msg[] = [{ role: "system", content: SYSTEM }, { role: "user", content: prompt }];
+  const notes: string[] = [];
+  const ask = async (msgs: Msg[], tools: boolean): Promise<ChatReply> => {
     const left = deadline - Date.now();
     if (left <= 0) throw new AgentError("Timed out.");
     if (signal?.aborted) throw new AgentError("Stopped.");
-    const { message: msg } = await ollamaPost<{ message: Msg }>("/api/chat", { model, messages, tools: TOOLS, stream: false,
+    return ollamaPost<ChatReply>("/api/chat", { model, messages: msgs, ...(tools ? { tools: TOOLS } : {}), stream: false,
       keep_alive: KEEP_ALIVE, options: { temperature: 0.2, num_ctx: NUM_CTX } }, left, signal);
+  };
+  for (let turn = 0; turn < MAX_TURNS; turn++) {
+    const reply = await ask(messages, true);
+    const msg = reply.message;
     if (!msg.tool_calls?.length) {
       const recovered = textToolCalls(msg.content ?? "");
       if (recovered.length) msg.tool_calls = recovered;
@@ -123,13 +151,22 @@ export async function runLocalCoder(model: string, prompt: string, folder: strin
     messages.push({ role: "assistant", content: msg.content ?? "", tool_calls: msg.tool_calls });
     if (!msg.tool_calls?.length) {
       const files = [...changed];
-      return `${(msg.content ?? "").trim()}${files.length ? `\n\nFiles written: ${files.join(", ")}` : "\n\n(No files were written.)"}`;
+      const text = (msg.content ?? "").replace(/<\/?tool_call>/g, "").trim();
+      return `${text}${notes.length ? `\n\n(Handed over ${notes.length}× when memory filled up.)` : ""}` +
+        `${files.length ? `\n\nFiles written: ${files.join(", ")}` : "\n\n(No files were written.)"}`;
     }
     for (const call of msg.tool_calls) {
       const raw = call.function.arguments;
       let args: Record<string, unknown> = {};
       try { args = typeof raw === "string" ? JSON.parse(raw) : (raw as Record<string, unknown>) ?? {}; } catch { /* bad JSON */ }
       messages.push({ role: "tool", tool_name: call.function.name, content: await runTool(root, call.function.name, args, changed) });
+    }
+    // Memory check: what Ollama counted for this turn, or our estimate including the tool results just added.
+    const used = Math.max((reply.prompt_eval_count ?? 0) + (reply.eval_count ?? 0), approxTokens(messages));
+    if (used >= handoverAt && notes.length < MAX_HANDOVERS) {
+      const note = (await ask([...messages, { role: "user", content: HANDOVER_ASK }], false)).message.content ?? "";
+      notes.push(note);
+      messages = [{ role: "system", content: SYSTEM }, { role: "user", content: handoverPrompt(prompt, note, [...changed], notes.length) }];
     }
   }
   throw new AgentError(`Stopped after ${MAX_TURNS} tool rounds. Files written so far: ${[...changed].join(", ") || "none"}.`);

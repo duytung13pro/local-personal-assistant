@@ -6,7 +6,8 @@ import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { addDays, isValidDate, layoutTimed, monthGrid, rangeLabel } from "../src/shared/dates";
 import { Store, ValidationError } from "../src/main/db";
-import { goodPlan, parsePlan, parseReview, rulePlan, stepPrompt, waves } from "../src/main/orchestrator";
+import { goodPlan, parsePlan, parseReview, reportOf, rulePlan, stepPrompt, wantsReport, waves } from "../src/main/orchestrator";
+import { HANDOVER_AT, approxTokens, handoverPrompt } from "../src/main/localcoder";
 import { matches } from "../src/shared/filters";
 import { parseMention } from "../src/shared/workers";
 import { chainWriters, cleanSummary, routerPrompt, contextText, fixWriters, parseRoute, parseTeam, runPlannerTool, workerPrompt } from "../src/main/chat";
@@ -303,6 +304,35 @@ test("chat: a new reply's tasks are only its own, never an older reply's finishe
     assert.deepEqual(s.stepsOfChat(next.id).map((x) => x.title), ["Translate"]);
     assert.equal(s.stepsOfChat(old.id)[0].status, "done");
   } finally { s.close(); }
+});
+
+test("reports: builders and checkers report in ≤10 lines; text deliverables don't", () => {
+  assert.ok(wantsReport({ agent: "qwen-coder", title: "Add the CSS" }));
+  assert.ok(wantsReport({ agent: "gpt-oss", title: "Review and test the build" }));
+  assert.ok(!wantsReport({ agent: "qwen", title: "Write the itinerary" }));
+  const long = ["## Report", ...Array.from({ length: 14 }, (_, i) => `line ${i + 1}`), "## Details", "huge code dump"].join("\n");
+  assert.match(reportOf(`${long}\n\n(Handed over 1× when memory filled up.)\n\nFiles written: a.js`),
+    /line 10\n\(Handed over 1× when memory filled up\.\)\nFiles written: a\.js$/);
+  const r = reportOf(`${long}\n\nFiles written: index.html, app.js`);
+  assert.equal(r.split("\n").length, 11, "10 report lines + the files line");
+  assert.doesNotMatch(r, /line 11|huge code dump/);
+  assert.match(r, /Files written: index.html, app.js$/);
+  assert.equal(reportOf("No sections here\nsecond line"), "No sections here\nsecond line", "falls back to the first lines");
+  const p = { id: "p", title: "T", brief: "", notes: "" } as never;
+  const s = { id: "s", projectId: "p", idx: 0, title: "Build", agent: "qwen-coder" as const, why: "", prompt: "x",
+    status: "todo" as const, output: "", updated: "", deps: [], chatMsg: "" };
+  assert.match(stepPrompt(p, [s], s, "", true), /## Report" section of at most 10 short lines/);
+  assert.doesNotMatch(stepPrompt(p, [s], s, "", false), /## Report/);
+});
+
+test("handover: triggers at 70% of the context and carries a ≤10-line note to the fresh session", () => {
+  assert.equal(HANDOVER_AT, Math.floor(32768 * 0.7));
+  assert.equal(approxTokens([{ content: "x".repeat(35) }]), 10);
+  const note = Array.from({ length: 15 }, (_, i) => `n${i + 1}`).join("\n");
+  const h = handoverPrompt("Build the budget page", note, ["index.html"], 1);
+  assert.match(h, /^Build the budget page[\s\S]*Handover note #1[\s\S]*n10\n[\s\S]*Files written so far: index.html/);
+  assert.doesNotMatch(h, /n11/);
+  assert.match(h, /do not start over/);
 });
 
 test("chat: router is told that questions merely mentioning calendars are not planner work", () => {

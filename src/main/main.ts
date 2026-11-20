@@ -7,7 +7,7 @@ import { Store, ValidationError } from "./db";
 import { AgentError, KEEP_ALIVE, NUM_CTX, agentStatuses, ollamaChat, ollamaPost, ollamaStream, runClaude, runClaudeChat, runCodex, runCodexEdit } from "./providers";
 import { RECENT, SUMMARY_SYSTEM, cleanSummary, contextText, mergePrompt, parseRoute, parseTeam, routerPrompt, runPlanner, selfSystem, workerPrompt, type Route } from "./chat";
 import { runLocalCoder } from "./localcoder";
-import { goodPlan, parsePlan, parseReview, plannerPrompt, reviewPrompt, rulePlan, stepPrompt, type Draft } from "./orchestrator";
+import { goodPlan, parsePlan, parseReview, plannerPrompt, reportOf, reviewPrompt, rulePlan, stepPrompt, wantsReport, type Draft } from "./orchestrator";
 import type { ChatMessage, ConnectionsReport, PlanResult, Project, Step, WorkerId } from "../shared/types";
 import { ASSIGNABLE, CHAT_ROUTABLE, WORKERS, isCloud, isWorker, parseMention } from "../shared/workers";
 
@@ -101,9 +101,16 @@ handle("deleteStep", (id) => {
   if (running.has(id)) throw new ValidationError("That step is running; wait for it to finish.");
   store.deleteStep(id);
 }, "steps");
+/** Team-plan steps and parts of a split chat job report back briefly; a single chat reply is the answer itself. */
+function reportFor(step: Step): boolean {
+  if (!wantsReport(step)) return false;
+  if (!step.chatMsg) return true;
+  try { return store.getChat(step.chatMsg).mode === "split"; } catch { return false; }
+}
+
 handle("previewStep", async (id) => {
   const step = store.getStep(id);
-  return stepPrompt(store.getProject(step.projectId), store.listSteps(step.projectId), step, await filesText(step.projectId));
+  return stepPrompt(store.getProject(step.projectId), store.listSteps(step.projectId), step, await filesText(step.projectId), reportFor(step));
 });
 
 // ---- the team: settings and availability -----------------------------------------------------------
@@ -265,7 +272,7 @@ function start(step: Step, siblings: Step[]) {
     try {
       if (step.agent !== "chatgpt" && !enabledOf(step.agent))
         throw new AgentError(`${WORKERS[step.agent].name} is turned off in Connections.`);
-      const prompt = stepPrompt(project, siblings, step, WORKERS[step.agent].writes ? "" : await filesText(project.id));
+      const prompt = stepPrompt(project, siblings, step, WORKERS[step.agent].writes ? "" : await filesText(project.id), reportFor(step));
       const last = join(DATA, `codex-last-${job.id}.txt`);
       const sig = abort.signal;
       const system = "You are a careful worker on the user's own PC. Answer in Markdown.";
@@ -432,7 +439,9 @@ async function mergeChat(msg: ChatMessage, steps: Step[]) {
   store.updateChat(msg.id, { status: "working", author: CHEF });
   changed("chat");
   const request = msg.replyTo ? store.getChat(msg.replyTo).content : "";
-  const parts = steps.map((s) => ({ title: s.title, worker: s.agent, status: s.status, output: s.output }));
+  // Builders and checkers hand the head chef their ≤10-line report; text deliverables go in whole.
+  const parts = steps.map((s) => ({ title: s.title, worker: s.agent, status: s.status,
+    output: s.status === "done" && wantsReport(s) ? reportOf(s.output) : s.output }));
   try {
     const out = await ollamaStream(modelOf(CHEF), "You write the final answer for the user's AI team.", mergePrompt(request, parts),
       (so) => delta(msg.id, so), { signal: ctl.signal });

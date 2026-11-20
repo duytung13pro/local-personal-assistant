@@ -42,7 +42,8 @@ ${p.notes.trim() ? `## Notes\n${p.notes.trim()}\n` : ""}`;
 
 export function reviewPrompt(p: Project, steps: Step[], files: string[], available: WorkerId[]): string {
   const results = steps.filter((s) => s.agent !== "chatgpt").map((s) =>
-    `### ${s.title} (${s.agent}, ${s.status})\n${(s.output || "(no output)").trim().slice(0, 6000)}`).join("\n\n");
+    `### ${s.title} (${s.agent}, ${s.status})\n${s.status === "done" && wantsReport(s) ? reportOf(s.output)
+      : (s.output || "(no output)").trim().slice(0, 6000)}`).join("\n\n"); // builders: short report; the reviewer reads the files
   return `You are the reviewer for a team of local AI workers. Check their results against the brief.
 You may read the files in the current folder; do not modify anything.
 
@@ -136,8 +137,31 @@ export function rulePlan(available: WorkerId[]): Draft[] {
   ];
 }
 
+/** Builders and checkers inside a team job report back to the head chef in at most 10 lines (their full output stays
+ * on the Team plan board). Text deliverables (an itinerary, an email) are the answer itself, so they are passed whole. */
+export const REPORT_LINES = 10;
+export function wantsReport(step: Pick<Step, "agent" | "title">): boolean {
+  return WORKERS[step.agent].writes || /\b(review|check|test|verify|audit|qa)\w*/i.test(step.title);
+}
+const REPORT_RULE = `Start your answer with a "## Report" section of at most ${REPORT_LINES} short lines for the head chef: ` +
+  `what you did, files changed, and any open problems (most important first). Then a "## Details" section with everything else.`;
+
+/** The worker's short report: its "## Report" section, else its first lines; never more than REPORT_LINES lines. */
+export function reportOf(output: string): string {
+  const text = output.replace(/<\/?tool_call>/g, "").trim();
+  const m = /^#{1,3}\s*Report\s*:?\s*$([\s\S]*?)(?=^#{1,3}\s|$(?![\s\S]))/im.exec(text);
+  const lines = (m ? m[1] : text).split("\n").map((l) => l.trimEnd()).filter((l) => l.trim());
+  const out = lines.slice(0, REPORT_LINES).map((l) => l.slice(0, 300));
+  // The local coder's own facts are always kept: handovers and the list of files written.
+  for (const re of [/^\(Handed over \d+× .*\)$/m, /^Files written: .*$/m]) {
+    const line = re.exec(text)?.[0];
+    if (line && !out.includes(line)) out.push(line);
+  }
+  return out.join("\n");
+}
+
 /** What a worker receives: the project, the results of the tasks it depends on, and its own task. */
-export function stepPrompt(p: Project, steps: Step[], step: Step, files = ""): string {
+export function stepPrompt(p: Project, steps: Step[], step: Step, files = "", report = false): string {
   const deps = steps.filter((s) => step.deps.includes(s.id) && s.status === "done" && s.output.trim());
   const writes = WORKERS[step.agent].writes;
   // A text-only model can't open files, so after a build it gets the files themselves, not just the builder's summary.
@@ -151,9 +175,9 @@ export function stepPrompt(p: Project, steps: Step[], step: Step, files = ""): s
     `## Your task: ${step.title}\n${step.prompt.trim()}`,
     writes ? "Create and edit files only inside the current folder. Do not run or install anything. First list and read the files " +
       "already there and stay consistent with them (same names, ids, classes; link new CSS/JS files from the HTML). " +
-      "When finished, list the files you changed and what each does."
-      : afterBuild ? "Answer in Markdown. Be concrete and brief. Quote the file and line for each problem; do not report problems the files above don't have."
-      : "Answer in Markdown. Be concrete and brief.",
+      (report ? REPORT_RULE : "When finished, list the files you changed and what each does.")
+      : afterBuild ? `Answer in Markdown. Be concrete and brief. Quote the file and line for each problem; do not report problems the files above don't have.${report ? ` ${REPORT_RULE}` : ""}`
+      : `Answer in Markdown. Be concrete and brief.${report ? ` ${REPORT_RULE}` : ""}`,
   ];
   return parts.filter(Boolean).join("\n\n");
 }

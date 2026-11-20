@@ -17,8 +17,14 @@ A Windows desktop app for your day (planner, calendar, checklist) with a built-i
   `@coder`, `@gpt-oss`, `@fast`, `@claude-chat` pick a model yourself; **`@team`** makes the head chef split the job
   across several models. Enter sends, Shift+Enter adds a line. Every answer shows why it was routed, has
   "Try with…" to compare models, and a Stop button. Cloud steps wait for **Review & send**; a counter shows today's
-  cloud calls. Replies stream and follow your language (English/Vietnamese). One thread per project; models see the
-  last 10 messages plus a running summary kept locally. Chat sub-tasks also appear on the Team plan board.
+  cloud calls. Replies stream and follow your language (English/Vietnamese). One thread per project; local models see
+  the last 10 messages plus a running summary kept locally, cloud models only the last 4. Chat sub-tasks also appear
+  on the Team plan board.
+  - In a split job, file-writing tasks run one after another (each builds on the last), a review waits for the build
+    and gets the real files, and builders/reviewers report back to the head chef in **≤10 lines** (their full output
+    stays on the Team plan board). Text parts (an itinerary, an email) are passed whole.
+  - **Handover notes:** when Qwen Coder's memory (32K context) is ~70% full, it writes a ≤10-line note (done / left /
+    names to keep) and a fresh session continues from it — up to 3 times per task.
 - **Projects** — rename with the pencil (or double-click); **Edit project** opens the Brief. New projects open on the Brief.
 - **AI Workspace → Team plan** — write a brief, then:
   1. **Plan with ChatGPT** → ChatGPT splits the brief into tasks, assigns each to a worker and sets dependencies.
