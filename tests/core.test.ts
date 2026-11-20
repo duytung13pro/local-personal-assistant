@@ -9,7 +9,7 @@ import { Store, ValidationError } from "../src/main/db";
 import { goodPlan, parsePlan, parseReview, rulePlan, stepPrompt, waves } from "../src/main/orchestrator";
 import { matches } from "../src/shared/filters";
 import { parseMention } from "../src/shared/workers";
-import { chainWriters, contextText, fixWriters, parseRoute, parseTeam, runPlannerTool } from "../src/main/chat";
+import { chainWriters, cleanSummary, routerPrompt, contextText, fixWriters, parseRoute, parseTeam, runPlannerTool } from "../src/main/chat";
 
 const dir = () => mkdtempSync(join(process.env.PA_TEST_TMP ?? tmpdir(), "pa-test-"));
 
@@ -261,6 +261,23 @@ test("chat: build tasks given to text-only models are moved to a file-writing wo
   assert.deepEqual(fixed.map((t) => t.agent), ["qwen-coder", "qwen", "qwen-coder", "qwen"],
     "a text review/merge stays with a text model");
   assert.deepEqual(fixWriters([d("Build it", "qwen")], ["qwen"]).map((t) => t.agent), ["qwen"], "no writer available: unchanged");
+});
+
+test("chat: leaked thinking never becomes the summary; cloud gets a short window and no summary", () => {
+  assert.equal(cleanSummary("Hmm, the user wants me to summarize a conversation."), "");
+  assert.equal(cleanSummary("<think>let me see</think>User is building a budget planner."), "User is building a budget planner.");
+  const msg = (i: number) => ({ id: String(i), projectId: "p", role: "user" as const, author: "you", content: `m${i}`, private: false,
+    status: "done" as const, mode: "" as const, reason: "", replyTo: "", created: "" });
+  const all = Array.from({ length: 9 }, (_, i) => msg(i));
+  const cloud = contextText(all as never, "User is building a budget planner.", true);
+  assert.doesNotMatch(cloud, /summarised|m4\b/);
+  assert.match(cloud, /m5[\s\S]*m8/);
+  assert.match(contextText(all as never, "User is building a budget planner.", false), /summarised/);
+});
+
+test("chat: router is told that questions merely mentioning calendars are not planner work", () => {
+  const p = { id: "p", title: "T", brief: "", notes: "" } as never;
+  assert.match(routerPrompt(p, "", "x", ["qwen"]), /how to sync with Google Calendar[\s\S]*NOT planner/);
 });
 
 test("chat: file-writing tasks are chained and a review waits for the build, prep stays parallel", () => {

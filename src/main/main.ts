@@ -5,7 +5,7 @@ import { readdir, readFile as readFileAsync, stat } from "node:fs/promises";
 import { join, resolve, relative, sep } from "node:path";
 import { Store, ValidationError } from "./db";
 import { AgentError, KEEP_ALIVE, agentStatuses, ollamaChat, ollamaPost, ollamaStream, runClaude, runClaudeChat, runCodex, runCodexEdit } from "./providers";
-import { RECENT, SUMMARY_SYSTEM, contextText, mergePrompt, parseRoute, parseTeam, routerPrompt, runPlanner, selfSystem, workerPrompt, type Route } from "./chat";
+import { RECENT, SUMMARY_SYSTEM, cleanSummary, contextText, mergePrompt, parseRoute, parseTeam, routerPrompt, runPlanner, selfSystem, workerPrompt, type Route } from "./chat";
 import { runLocalCoder } from "./localcoder";
 import { goodPlan, parsePlan, parseReview, plannerPrompt, reviewPrompt, rulePlan, stepPrompt, type Draft } from "./orchestrator";
 import type { ChatMessage, ConnectionsReport, PlanResult, Project, Step, WorkerId } from "../shared/types";
@@ -301,7 +301,7 @@ const streams = new Map<string, AbortController>(); // chat message id -> its ow
 const delta = (id: string, text: string) => win?.webContents.send("pa:chatDelta", id, text);
 
 function chatSummary(pid: string) {
-  return store.getSetting(`chatSummary:${pid}`, "");
+  return cleanSummary(store.getSetting(`chatSummary:${pid}`, ""));
 }
 
 /** Keep a short running summary of older, non-private messages (local, in the background). */
@@ -313,7 +313,9 @@ async function refreshSummary(pid: string) {
   try {
     const text = `${chatSummary(pid) ? `Summary so far: ${chatSummary(pid)}\n\n` : ""}${older.slice(covered)
       .map((m) => `${m.role === "user" ? "User" : "Assistant"}: ${m.content.slice(0, 1500)}`).join("\n\n")}`;
-    const s = await ollamaChat(modelOf("qwen-fast"), SUMMARY_SYSTEM, text, { timeoutMs: 120_000 });
+    // think:true keeps qwen3's reasoning in its own field instead of leaking into the summary text.
+    const s = cleanSummary(await ollamaChat(modelOf("qwen-fast"), SUMMARY_SYSTEM, text, { timeoutMs: 120_000, think: true }));
+    if (!s) return; // only reasoning came back: keep the old summary, try again later
     store.setSetting(`chatSummary:${pid}`, s.slice(0, 1500));
     store.setSetting(`chatSummaryCount:${pid}`, String(older.length));
   } catch { /* try again next time */ }

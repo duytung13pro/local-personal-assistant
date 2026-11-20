@@ -28,8 +28,10 @@ export function routerPrompt(p: Project, context: string, message: string, avail
 Choose exactly one mode:
 - "self": you can answer well yourself, quickly: greetings, small talk, quick facts, rewording, short explanations,
   advice that needs no files and no deep research.
-- "planner": the message is about the user's own tasks, to-dos, deadlines, calendar, events or schedule
-  (questions or changes). You have local tools for that. Never route this to anyone else.
+- "planner": the user wants to SEE or CHANGE their own saved tasks, to-dos, deadlines or calendar events
+  ("what's due this week?", "add a task", "move the dentist to Friday"). You have local tools for that. Never route
+  this to anyone else. General questions that only mention tasks or calendars (comparing apps or approaches,
+  how to sync with Google Calendar, productivity advice, building a feature) are NOT planner: use self/single/split.
 - "single": one worker should do it. Pick the best worker below.
 - "split": a bigger job with separable parts. Give 2-5 tasks; tasks without "deps" on each other run at the same time.
 
@@ -123,11 +125,23 @@ export function chainWriters(tasks: Draft[]): Draft[] {
   });
 }
 
-/** Recent conversation as text. Cloud models never see private (planner) messages. */
+/** Messages a cloud model gets: only the last few, no running summary, so you send (and review) little. */
+export const RECENT_CLOUD = 4;
+
+/** Recent conversation as text. Cloud models never see private (planner) messages and get a shorter window. */
 export function contextText(msgs: ChatMessage[], summary: string, forCloud: boolean): string {
-  const recent = msgs.filter((m) => m.content.trim() && m.status !== "failed" && !(forCloud && m.private)).slice(-RECENT);
-  const lines = recent.map((m) => `${m.role === "user" ? "User" : WORKERS[m.author as WorkerId]?.name ?? "Assistant"}: ${m.content.trim().slice(0, 2000)}`);
-  return [summary ? `(Earlier, summarised) ${summary}` : "", ...lines].filter(Boolean).join("\n\n");
+  const recent = msgs.filter((m) => m.content.trim() && m.status !== "failed" && !(forCloud && m.private))
+    .slice(forCloud ? -RECENT_CLOUD : -RECENT);
+  const lines = recent.map((m) => `${m.role === "user" ? "User" : WORKERS[m.author as WorkerId]?.name ?? "Assistant"}: ${m.content.trim().slice(0, forCloud ? 1200 : 2000)}`);
+  const s = forCloud ? "" : cleanSummary(summary);
+  return [s ? `(Earlier, summarised) ${s}` : "", ...lines].filter(Boolean).join("\n\n");
+}
+
+/** A model's summary, minus any thinking it leaked ("<think>…", "Hmm, the user wants me to…"). "" if it is only that. */
+export function cleanSummary(text: string): string {
+  const s = text.replace(/<think>[\s\S]*?(<\/think>|$)/gi, "").trim();
+  if (/^(hmm|okay|ok|alright|let me|so,|first,|i need|i should|the user (wants|asked|is asking))\b/i.test(s)) return "";
+  return s;
 }
 
 export function selfSystem(p: Project): string {
