@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useState, type ReactNode } from "react";
 import { AnimatePresence, motion } from "motion/react";
-import { Activity as ActivityIcon, Bot, CalendarDays, ChevronLeft, ChevronRight, LayoutGrid, ListChecks, NotebookPen, PlugZap, Undo2, X } from "lucide-react";
+import { Activity as ActivityIcon, Bot, CalendarDays, ChevronLeft, ChevronRight, LayoutGrid, ListChecks, NotebookPen, PanelLeftClose, PanelLeftOpen, PlugZap, Undo2, X } from "lucide-react";
 import { MONTHS, monthGrid, shiftMonth, today as todayIso } from "../shared/dates";
-import { api, cx, dismiss, undoLast, useData, useToasts } from "./lib";
+import { api, cx, dismiss, undoLast, useData, useToasts, useToggle } from "./lib";
 import { IconButton } from "./ui";
 import { EventEditor, TaskEditor, type EventDraft, type TaskDraft } from "./editors";
 import { Planner } from "./views/Planner";
@@ -47,6 +47,7 @@ export default function App() {
   const [taskDraft, setTaskDraft] = useState<TaskDraft>(null);
   const [eventDraft, setEventDraft] = useState<EventDraft>(null);
   const [searchSignal, setSearchSignal] = useState(0);
+  const [sidebar, toggleSidebar] = useToggle("ui:sidebar");
   const [undo] = useData(() => api.latestUndo(), [], ["tasks", "events", "all"]);
 
   useEffect(() => { // day rollover while the app stays open
@@ -61,7 +62,8 @@ export default function App() {
       const typing = (e.target as HTMLElement).closest("input,textarea,select,[contenteditable]");
       if (!e.ctrlKey || e.altKey || e.defaultPrevented) return; // the notes editor handles its own Ctrl+F, Ctrl+Z…
       const k = e.key.toLowerCase();
-      if (k === "n") { e.preventDefault(); setTaskDraft({ due: view === "planner" || view === "calendar" ? focusDate : "" }); }
+      if (k === "\\") { e.preventDefault(); toggleSidebar(); }
+      else if (k === "n") { e.preventDefault(); setTaskDraft({ due: view === "planner" || view === "calendar" ? focusDate : "" }); }
       else if (k === "f" && (e.target as HTMLElement).closest(".cm-editor")) return; // find inside the note
       else if (k === "f") { e.preventDefault(); setView("checklist"); setSearchSignal((n) => n + 1); }
       else if (k === "z" && !typing && !document.querySelector("[role=dialog]")) { e.preventDefault(); void undoLast(); }
@@ -69,13 +71,13 @@ export default function App() {
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [view, focusDate]);
+  }, [view, focusDate, toggleSidebar]);
 
   const ctx: Ctx = { today, focusDate, setFocusDate, editTask: setTaskDraft, editEvent: setEventDraft, go, searchSignal };
 
   return (
-    <div className="grid h-full grid-cols-[232px_1fr] grid-rows-[1fr_auto]">
-      <aside className="row-span-1 flex flex-col gap-1 border-r border-line bg-sidebar px-3 pt-4 pb-3 overflow-y-auto">
+    <div className={cx("grid h-full grid-rows-[1fr_auto]", sidebar ? "grid-cols-[232px_1fr]" : "grid-cols-[1fr]")}>
+      <aside hidden={!sidebar} className="row-span-1 flex flex-col gap-1 border-r border-line bg-sidebar px-3 pt-4 pb-3 overflow-y-auto">
         <div className="px-2 pb-3 text-[15px] font-semibold tracking-[-0.01em]">Personal Assistant</div>
         <MiniMonth today={today} selected={focusDate} onPick={(d) => { setFocusDate(d); if (view !== "calendar") setView("planner"); }} />
         <nav className="mt-3 flex flex-col">
@@ -110,6 +112,8 @@ export default function App() {
       </main>
 
       <footer className="col-span-2 flex h-9 items-center gap-3 border-t border-line bg-sidebar px-3 text-[12.5px] text-muted">
+        <IconButton label={sidebar ? "Hide sidebar (Ctrl+\)" : "Show sidebar (Ctrl+\)"} className="size-7" onClick={toggleSidebar}>
+          {sidebar ? <PanelLeftClose size={15} /> : <PanelLeftOpen size={15} />}</IconButton>
         <button type="button" onClick={() => void undoLast()} disabled={!undo}
           className="inline-flex h-6 items-center gap-1.5 rounded-md px-2 text-ink hover:bg-hover disabled:text-faint disabled:hover:bg-transparent active:scale-[0.97] transition-transform duration-100">
           <Undo2 size={13} /> {undo ? `Undo: ${undo.label}` : "Undo"}

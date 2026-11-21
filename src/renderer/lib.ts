@@ -68,3 +68,15 @@ export async function undoLast() {
 }
 
 export const cx = (...c: (string | false | null | undefined)[]) => c.filter(Boolean).join(" ");
+
+/** A show/hide flag remembered across restarts (per computer). */
+export function useToggle(key: string, initial = true): [boolean, () => void] {
+  const [on, setOn] = useState<boolean>(() => {
+    try { const v = localStorage.getItem(key); return v === null ? initial : v === "1"; } catch { return initial; }
+  });
+  const toggle = useCallback(() => setOn((v) => {
+    try { localStorage.setItem(key, v ? "0" : "1"); } catch { /* storage off */ }
+    return !v;
+  }), [key]);
+  return [on, toggle];
+}

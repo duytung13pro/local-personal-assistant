@@ -40,6 +40,8 @@ A Windows desktop app for your day (planner, calendar, checklist) with a built-i
 - **Activity** — every agent run with its output. **Connections** — which workers are ready, model per worker,
   on/off switches, "Warm up models".
 - Undo (Ctrl+Z) for completing/reopening and deleting tasks and events. Ctrl+N new task, Ctrl+F search, Ctrl+1–7 views.
+- Hide/show panels (remembered): the main sidebar with the footer button or Ctrl+\; the Notes list and the
+  AI Workspace project list sit on the right and fold away with the panel button at the end of their toolbar.
 
 ## The team
 

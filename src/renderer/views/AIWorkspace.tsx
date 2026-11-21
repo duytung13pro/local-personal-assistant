@@ -1,11 +1,11 @@
 import { useEffect, useMemo, useState } from "react";
-import { ClipboardCheck, FolderOpen, Loader2, Pencil, Play, Plus, Sparkles, Square, Trash2 } from "lucide-react";
+import { ClipboardCheck, FolderOpen, Loader2, PanelRightClose, PanelRightOpen, Pencil, Play, Plus, Sparkles, Square, Trash2 } from "lucide-react";
 import type { Project, Step, WorkerId } from "../../shared/types";
 import { waves } from "../../main/orchestrator";
 import { ChatTab } from "./Chat";
 import { isCloud } from "../../shared/workers";
-import { api, attempt, cx, toast, useData } from "../lib";
-import { AGENT_LABEL, AgentBadge, Button, Dialog, Empty, Field, inputCls, textareaCls } from "../ui";
+import { api, attempt, cx, toast, useData, useToggle } from "../lib";
+import { AGENT_LABEL, AgentBadge, Button, Dialog, Empty, Field, IconButton, inputCls, textareaCls } from "../ui";
 
 type Tab = "chat" | "brief" | "team" | "files";
 
@@ -18,6 +18,8 @@ export function AIWorkspace() {
   const [renaming, setRenaming] = useState<string | null>(null);
   useEffect(() => { if (!pid && projects?.length) setPid(projects[0].id); }, [projects, pid]);
   const project = projects?.find((p) => p.id === pid) ?? null;
+  const [listOpen, toggleList] = useToggle("ui:projects-list");
+  const showList = listOpen || !project; // with no project open, the list is the page
 
   const create = async () => {
     try {
@@ -33,7 +35,12 @@ export function AIWorkspace() {
 
   return (
     <div className="flex h-full gap-5 px-5 pt-4 pb-4">
-      <aside className="flex w-[240px] shrink-0 flex-col">
+      <div className="min-w-0 flex-1">
+        {project ? <ProjectPane key={project.id} project={project} startOn={fresh === project.id ? "brief" : "chat"}
+          onDeleted={() => setPid(null)} listOpen={listOpen} toggleList={toggleList} /> :
+          <div className="grid h-full place-items-center text-[14px] text-faint">Create a project to start.</div>}
+      </div>
+      <aside hidden={!showList} className="flex w-[240px] shrink-0 flex-col">
         <h1 className="pb-3 text-[22px] font-semibold">AI Workspace</h1>
         <div className="flex min-h-0 flex-1 flex-col gap-1 overflow-y-auto">
           {(projects ?? []).length === 0 && <Empty>No projects yet.</Empty>}
@@ -59,11 +66,6 @@ export function AIWorkspace() {
               onKeyDown={(e) => { if (e.key === "Enter") void create(); }} placeholder="e.g. Budget tracker" /></Field>
         </Dialog>
       </aside>
-      <div className="min-w-0 flex-1">
-        {project ? <ProjectPane key={project.id} project={project} startOn={fresh === project.id ? "brief" : "chat"}
-          onDeleted={() => setPid(null)} /> :
-          <div className="grid h-full place-items-center text-[14px] text-faint">Create a project to start.</div>}
-      </div>
     </div>
   );
 }
@@ -81,7 +83,9 @@ function RenameField({ project, onDone }: { project: Project; onDone: () => void
   );
 }
 
-function ProjectPane({ project, startOn, onDeleted }: { project: Project; startOn: Tab; onDeleted: () => void }) {
+function ProjectPane({ project, startOn, onDeleted, listOpen, toggleList }: {
+  project: Project; startOn: Tab; onDeleted: () => void; listOpen: boolean; toggleList: () => void;
+}) {
   const [tab, setTab] = useState<Tab>(startOn);
   return (
     <div className="flex h-full flex-col overflow-hidden rounded-xl border border-line bg-panel">
@@ -97,6 +101,8 @@ function ProjectPane({ project, startOn, onDeleted }: { project: Project; startO
           <Button size="sm" variant="ghost" className="mb-1.5 ml-auto" icon={<Pencil size={13} />} onClick={() => setTab("brief")}>
             Edit project</Button>
         )}
+        <IconButton label={listOpen ? "Hide projects list" : "Show projects list"} className={cx("mb-1 size-8", tab === "brief" && "ml-auto")}
+          onClick={toggleList}>{listOpen ? <PanelRightClose size={15} /> : <PanelRightOpen size={15} />}</IconButton>
       </div>
       {tab === "chat" && <div className="min-h-0 flex-1"><ChatTab project={project} onShowFiles={() => setTab("files")}
         onEditBrief={() => setTab("brief")} /></div>}

@@ -2,7 +2,7 @@
 import { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState, type MouseEvent, type ReactNode } from "react";
 import { EditorView } from "@codemirror/view";
 import { EditorState } from "@codemirror/state";
-import { Bold, Code, Columns2, Eye, FileDown, FileText, Heading, Italic, Link, List, ListChecks, NotebookPen, PenLine,
+import { Bold, Code, Columns2, Eye, FileDown, FileText, Heading, Italic, Link, List, ListChecks, NotebookPen, PanelRightClose, PanelRightOpen, PenLine,
   Pin, PinOff, Plus, Quote, Search, Sigma, Table, Trash2 } from "lucide-react";
 import "katex/dist/katex.min.css";
 import "katex/contrib/copy-tex"; // copying rendered math copies its LaTeX source
@@ -10,7 +10,7 @@ import "../note.css";
 import type { Note } from "../../shared/types";
 import { renderNote } from "../../shared/markdown";
 import { fmtShort, today } from "../../shared/dates";
-import { api, attempt, cx, toast, undoLast, useData } from "../lib";
+import { api, attempt, cx, toast, undoLast, useData, useToggle } from "../lib";
 import { Button, IconButton, inputCls } from "../ui";
 import { block, noteExtensions, prefix, topLine, wrap } from "../noteEditor";
 
@@ -64,8 +64,10 @@ export function Notes() {
   const [mode, setMode] = useState<Mode>(() => (localStorage.getItem("notes:mode") as Mode) || "split");
   useEffect(() => { try { localStorage.setItem("notes:mode", mode); } catch { /* storage off */ } }, [mode]);
 
+  const [listOpen, toggleList] = useToggle("ui:notes-list");
   const list = notes ?? [];
   const current = list.find((n) => n.id === selected) ?? null;
+  const showList = listOpen || !current; // with no note open, the list is the page
   useEffect(() => { // keep a valid selection: first note when nothing (or a deleted note) is selected
     if (notes && (!selected || !notes.some((n) => n.id === selected))) setSelected(notes[0]?.id ?? null);
   }, [notes, selected]);
@@ -81,8 +83,25 @@ export function Notes() {
   };
 
   return (
-    <div className="grid h-full grid-cols-[268px_1fr]">
-      <aside className="flex min-h-0 flex-col border-r border-line bg-[#fafaf8]">
+    <div className={cx("grid h-full", showList ? "grid-cols-[1fr_268px]" : "grid-cols-[1fr]")}>
+      {current ? <NoteEditor key={current.id} note={current} mode={mode} setMode={setMode}
+        listOpen={listOpen} toggleList={toggleList} onNew={() => void create()} />
+        : !notes ? <div /> : (
+          <div className="grid place-items-center">
+            <div className="max-w-[360px] text-center">
+              <NotebookPen size={28} className="mx-auto text-faint" />
+              <h2 className="mt-3 text-[17px] font-semibold">Notes with real math</h2>
+              <p className="mt-1.5 text-[13.5px] leading-relaxed text-muted">Markdown plus LaTeX: $…$, $$…$$, align, matrices,
+                numbered equations with \eqref, and \newcommand. Notes stay on this computer.</p>
+              <div className="mt-4 flex justify-center gap-2">
+                <Button variant="primary" icon={<Plus size={15} />} onClick={() => void create()}>New note</Button>
+                <Button onClick={() => void create(SAMPLE)}>Open a sample</Button>
+              </div>
+            </div>
+          </div>
+        )}
+
+      <aside hidden={!showList} className="flex min-h-0 flex-col border-l border-line bg-[#fafaf8]">
         <header className="flex items-center gap-2 px-4 pt-4 pb-3">
           <h1 className="text-[22px] font-semibold">Notes</h1>
           <Button variant="primary" size="sm" className="ml-auto" icon={<Plus size={14} />} onClick={() => void create()}>New</Button>
@@ -109,27 +128,13 @@ export function Notes() {
           ))}
         </div>
       </aside>
-
-      {current ? <NoteEditor key={current.id} note={current} mode={mode} setMode={setMode} />
-        : notes && (
-          <div className="grid place-items-center">
-            <div className="max-w-[360px] text-center">
-              <NotebookPen size={28} className="mx-auto text-faint" />
-              <h2 className="mt-3 text-[17px] font-semibold">Notes with real math</h2>
-              <p className="mt-1.5 text-[13.5px] leading-relaxed text-muted">Markdown plus LaTeX: $…$, $$…$$, align, matrices,
-                numbered equations with \eqref, and \newcommand. Notes stay on this computer.</p>
-              <div className="mt-4 flex justify-center gap-2">
-                <Button variant="primary" icon={<Plus size={15} />} onClick={() => void create()}>New note</Button>
-                <Button onClick={() => void create(SAMPLE)}>Open a sample</Button>
-              </div>
-            </div>
-          </div>
-        )}
     </div>
   );
 }
 
-function NoteEditor({ note, mode, setMode }: { note: Note; mode: Mode; setMode: (m: Mode) => void }) {
+function NoteEditor({ note, mode, setMode, listOpen, toggleList, onNew }: {
+  note: Note; mode: Mode; setMode: (m: Mode) => void; listOpen: boolean; toggleList: () => void; onNew: () => void;
+}) {
   const host = useRef<HTMLDivElement>(null);
   const preview = useRef<HTMLDivElement>(null);
   const view = useRef<EditorView | null>(null);
@@ -244,6 +249,10 @@ function NoteEditor({ note, mode, setMode }: { note: Note; mode: Mode; setMode: 
         <IconButton label="Export as Markdown (.md)" onClick={() => void exportAs("md")}><FileText size={15} /></IconButton>
         <IconButton label="Export as PDF" onClick={() => void exportAs("pdf")}><FileDown size={15} /></IconButton>
         <IconButton label="Delete note" className="hover:text-danger" onClick={() => void remove()}><Trash2 size={15} /></IconButton>
+        <Sep />
+        {!listOpen && <IconButton label="New note" onClick={onNew}><Plus size={15} /></IconButton>}
+        <IconButton label={listOpen ? "Hide notes list" : "Show notes list"} onClick={toggleList}>
+          {listOpen ? <PanelRightClose size={15} /> : <PanelRightOpen size={15} />}</IconButton>
       </div>
 
       <div className={cx("grid min-h-0 flex-1", mode === "split" ? "grid-cols-2" : "grid-cols-1")}>
