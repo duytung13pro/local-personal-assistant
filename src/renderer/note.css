@@ -1,0 +1,40 @@
+/* Rendered note (preview and PDF export). Plain CSS so the PDF export can reuse it without Tailwind. */
+.note-prose { max-width: 760px; margin: 0 auto; line-height: 1.65; font-size: 15px; color: #1d1d1b; overflow-wrap: break-word; user-select: text; }
+.note-prose > :first-child { margin-top: 0; }
+.note-prose h1, .note-prose h2, .note-prose h3, .note-prose h4 { font-weight: 650; line-height: 1.25; margin: 1.6em 0 0.55em; letter-spacing: -0.015em; }
+.note-prose h1 { font-size: 1.85em; }
+.note-prose h2 { font-size: 1.45em; padding-bottom: 0.25em; border-bottom: 1px solid #e5e5e0; }
+.note-prose h3 { font-size: 1.2em; }
+.note-prose h4 { font-size: 1.05em; }
+.note-prose p, .note-prose ul, .note-prose ol, .note-prose blockquote, .note-prose pre, .note-prose table { margin: 0.75em 0; }
+.note-prose ul, .note-prose ol { padding-left: 1.6em; }
+.note-prose li { margin: 0.2em 0; }
+.note-prose li.task { list-style: none; margin-left: -1.4em; }
+.note-prose li.task input { margin: 0 0.45em 0 0; vertical-align: -1px; accent-color: #f5862a; }
+.note-prose a { color: #9a470a; text-decoration: underline; text-underline-offset: 2px; cursor: pointer; }
+.note-prose blockquote { padding: 0.1em 1em; border-left: 3px solid #f5862a; color: #4a4a46; background: #fbfaf7; border-radius: 0 6px 6px 0; }
+.note-prose code { font-family: "Cascadia Code", Consolas, monospace; font-size: 0.88em; background: #f1f1ee; padding: 0.1em 0.35em; border-radius: 4px; }
+.note-prose pre { background: #f6f6f3; border: 1px solid #e5e5e0; border-radius: 8px; padding: 0.8em 1em; overflow-x: auto; }
+.note-prose pre code { background: none; padding: 0; font-size: 0.86em; line-height: 1.55; }
+.note-prose hr { border: 0; border-top: 1px solid #e5e5e0; margin: 1.6em 0; }
+.note-prose table { border-collapse: collapse; display: block; overflow-x: auto; }
+.note-prose th, .note-prose td { border: 1px solid #e0e0da; padding: 0.35em 0.75em; text-align: left; }
+.note-prose th { background: #f6f6f3; font-weight: 600; }
+.note-prose img { max-width: 100%; }
+
+/* Math */
+.note-prose .katex { font-size: 1.12em; }
+.note-prose .katex-display { margin: 0.9em 0; overflow-x: auto; overflow-y: hidden; padding: 0.3em 4px; } /* padding stops a 2px overflow scrollbar on \tag rows */
+.note-prose .math-block { margin: 0.9em 0; }
+.note-prose .math-error { color: #b42318; background: #fdeceb; border-radius: 6px; }
+.note-prose span.math-error { padding: 0 0.3em; }
+.note-prose div.math-error { display: flex; flex-direction: column; gap: 0.2em; padding: 0.5em 0.75em; }
+.note-prose .math-error code { background: none; padding: 0; color: inherit; white-space: pre-wrap; }
+.note-prose .math-error small { font-size: 0.8em; opacity: 0.9; }
+
+@media print {
+  .note-prose { max-width: none; font-size: 11pt; }
+  .note-prose h1, .note-prose h2, .note-prose h3 { break-after: avoid; }
+  .note-prose pre, .note-prose .katex-display, .note-prose table, .note-prose blockquote { break-inside: avoid; }
+  .note-prose .katex-display { overflow: visible; }
+}

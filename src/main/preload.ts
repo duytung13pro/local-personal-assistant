@@ -12,7 +12,7 @@ const names = ["listTasks", "addTask", "updateTask", "setTaskDone", "deleteTask"
   "deleteEvent", "latestUndo", "undo", "listProjects", "createProject", "updateProject", "deleteProject", "projectFolder",
   "listFiles", "readFile", "listSteps", "previewPlan", "planSteps", "previewReview", "reviewProject", "updateStep", "deleteStep",
   "previewStep", "runStep", "runAll", "stopQueue", "listJobs", "listChat", "sendChat", "declineStep", "stopChat", "rerunChat", "chatUsage", "connections", "warmUp", "setWorkerModel", "setWorkerEnabled", "importOld",
-  "openPath"] as const;
+  "openPath", "listNotes", "createNote", "updateNote", "deleteNote", "exportNote", "openLink"] as const;
 
 const api = Object.fromEntries(names.map((n) => [n, (...a: unknown[]) => call(n, ...a)])) as unknown as Api;
 api.onChanged = (cb) => {

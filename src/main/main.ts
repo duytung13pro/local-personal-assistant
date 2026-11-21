@@ -1,6 +1,8 @@
 // Electron main process: window, IPC handlers, agents and the job runner.
-import { app, BrowserWindow, ipcMain, shell, screen } from "electron";
-import { existsSync, mkdirSync, readFileSync, writeFileSync, renameSync } from "node:fs";
+import { app, BrowserWindow, dialog, ipcMain, shell, screen } from "electron";
+import { existsSync, mkdirSync, readFileSync, writeFileSync, renameSync, rmSync } from "node:fs";
+import { pathToFileURL } from "node:url";
+import { renderNote } from "../shared/markdown";
 import { readdir, readFile as readFileAsync, stat } from "node:fs/promises";
 import { join, resolve, relative, sep } from "node:path";
 import { Store, ValidationError } from "./db";
@@ -66,6 +68,17 @@ handle("updateEvent", (id, e) => store.updateEvent(id, e), "events");
 handle("deleteEvent", (id) => store.deleteEvent(id), "events");
 handle("latestUndo", () => store.latestUndo());
 handle("undo", () => store.undo(), "all");
+
+handle("listNotes", () => store.listNotes());
+handle("createNote", (body) => store.createNote(body), "notes");
+handle("updateNote", (id, n) => store.updateNote(id, n), "notes");
+handle("deleteNote", (id) => store.deleteNote(id), "notes");
+handle("exportNote", (id, kind) => exportNote(store.getNote(id), kind === "pdf" ? "pdf" : "md"));
+handle("openLink", async (url) => {
+  const u = String(url);
+  if (!/^(https?:|mailto:)/i.test(u)) throw new ValidationError("Only web and mailto links can be opened.");
+  await shell.openExternal(u);
+});
 
 handle("listProjects", () => store.listProjects());
 handle("createProject", (title) => store.createProject(title), "projects");
@@ -530,6 +543,47 @@ handle("openPath", async (p) => {
   await shell.openPath(full);
 });
 
+// ---- notes export ------------------------------------------------------------------------------
+const safeName = (t: string) => t.replace(/[<>:"/\|?*\u0000-\u001f]/g, "").replace(/\s+/g, " ").trim().slice(0, 80) || "Note";
+
+/** Save a note as Markdown, or as a PDF rendered with the same Markdown + KaTeX as the preview. */
+async function exportNote(note: { title: string; body: string }, kind: "md" | "pdf"): Promise<string | null> {
+  const dir = join(DATA, "exports");
+  mkdirSync(dir, { recursive: true });
+  const res = await dialog.showSaveDialog(win!, {
+    title: kind === "pdf" ? "Export note as PDF" : "Export note as Markdown",
+    defaultPath: join(dir, `${safeName(note.title)}.${kind}`),
+    filters: kind === "pdf" ? [{ name: "PDF", extensions: ["pdf"] }] : [{ name: "Markdown", extensions: ["md"] }],
+  });
+  if (res.canceled || !res.filePath) return null;
+  if (kind === "md") {
+    writeFileSync(res.filePath, note.body, "utf8");
+    return res.filePath;
+  }
+  const katexDir = join(ROOT, "node_modules", "katex", "dist");
+  const fonts = pathToFileURL(join(katexDir, "fonts")).href + "/";
+  const css = readFileSync(join(katexDir, "katex.min.css"), "utf8").replace(/url\(fonts\//g, `url(${fonts}`) +
+    readFileSync(join(ROOT, "src", "renderer", "note.css"), "utf8");
+  const page = `<!doctype html><html><head><meta charset="utf-8"><title>${note.title.replace(/</g, "&lt;")}</title>` +
+    `<style>${css} body{margin:0;font:11pt/1.6 "Segoe UI",system-ui,sans-serif;color:#1d1d1b}</style></head>` +
+    `<body><article class="note-prose">${renderNote(note.body)}</article></body></html>`;
+  const tmp = join(dir, `.print-${Date.now()}.html`);
+  writeFileSync(tmp, page, "utf8");
+  const pdfWin = new BrowserWindow({ show: false, webPreferences: { sandbox: true, contextIsolation: true, nodeIntegration: false } });
+  try {
+    pdfWin.webContents.on("will-navigate", (e) => e.preventDefault());
+    await pdfWin.loadFile(tmp);
+    await pdfWin.webContents.executeJavaScript("document.fonts.ready.then(() => true)");
+    const pdf = await pdfWin.webContents.printToPDF({ pageSize: "A4", printBackground: true,
+      margins: { top: 0.7, bottom: 0.7, left: 0.75, right: 0.75 } });
+    writeFileSync(res.filePath, pdf);
+    return res.filePath;
+  } finally {
+    pdfWin.destroy();
+    rmSync(tmp, { force: true });
+  }
+}
+
 // ---- window ------------------------------------------------------------------------------------
 const BOUNDS = join(DATA, "window.json");
 
@@ -579,7 +633,7 @@ async function screenshots() {
   mkdirSync(dir, { recursive: true });
   const wait = (ms: number) => new Promise((r) => setTimeout(r, ms));
   await wait(900);
-  for (const view of ["planner", "calendar", "checklist", "ai", "activity", "connections"]) {
+  for (const view of ["planner", "calendar", "checklist", "notes", "ai", "activity", "connections"]) {
     await win!.webContents.executeJavaScript(`window.__pa && window.__pa.show(${JSON.stringify(view)})`);
     await wait(view === "connections" ? 2500 : 500);
     const img = await win!.webContents.capturePage();

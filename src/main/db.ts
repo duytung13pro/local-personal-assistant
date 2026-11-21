@@ -3,10 +3,11 @@
 import { DatabaseSync } from "node:sqlite";
 import { randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
-import type { CalEvent, ChatMessage, ChatMode, ChatStatus, ImportResult, Priority, Project, Step, StepStatus, Task, Job, UndoEntry,
+import type { CalEvent, ChatMessage, ChatMode, ChatStatus, ImportResult, Note, Priority, Project, Step, StepStatus, Task, Job, UndoEntry,
   WorkerId } from "../shared/types";
 import { CLOUD, isWorker } from "../shared/workers";
 import { isValidDate, isValidTime, minutes } from "../shared/dates";
+import { noteTitle } from "../shared/markdown";
 
 export class ValidationError extends Error {}
 
@@ -44,6 +45,9 @@ CREATE TABLE IF NOT EXISTS chat(
   status TEXT NOT NULL DEFAULT 'done', mode TEXT NOT NULL DEFAULT '', reason TEXT NOT NULL DEFAULT '',
   reply_to TEXT NOT NULL DEFAULT '', created TEXT NOT NULL, updated TEXT NOT NULL);
 CREATE INDEX IF NOT EXISTS chat_project ON chat(project_id, created);
+CREATE TABLE IF NOT EXISTS notes(
+  id TEXT PRIMARY KEY, title TEXT NOT NULL DEFAULT '', body TEXT NOT NULL DEFAULT '', pinned INTEGER NOT NULL DEFAULT 0,
+  created TEXT NOT NULL, updated TEXT NOT NULL);
 INSERT OR IGNORE INTO meta(key, value) VALUES ('schema_version', '1');
 `;
 
@@ -76,6 +80,16 @@ const toChat = (r: Row): ChatMessage => ({
   content: String(r.content), private: Number(r.private) === 1, status: r.status as ChatStatus, mode: String(r.mode) as ChatMode | "",
   reason: String(r.reason), replyTo: String(r.reply_to), created: String(r.created),
 });
+const toNote = (r: Row): Note => ({
+  id: String(r.id), title: String(r.title), body: String(r.body), pinned: Number(r.pinned) === 1,
+  created: String(r.created), updated: String(r.updated),
+});
+const NOTE_MAX = 2_000_000; // characters
+const cleanBody = (b: unknown) => {
+  const s = String(b ?? "");
+  if (s.length > NOTE_MAX) throw new ValidationError("This note is too long (over 2 million characters). Split it into two notes.");
+  return s;
+};
 const toJob = (r: Row): Job => ({
   id: String(r.id), projectId: String(r.project_id), stepId: String(r.step_id), agent: r.agent as WorkerId,
   title: String(r.title), status: r.status as Job["status"], output: String(r.output), error: String(r.error),
@@ -239,8 +253,43 @@ export class Store {
     });
   }
 
+  // ---- notes ---------------------------------------------------------------------------------
+  listNotes(): Note[] {
+    return this.all("SELECT * FROM notes ORDER BY pinned DESC, updated DESC").map(toNote);
+  }
+  getNote(id: string): Note {
+    const r = this.get("SELECT * FROM notes WHERE id=?", id);
+    if (!r) throw new ValidationError("That note no longer exists.");
+    return toNote(r);
+  }
+  createNote(body = ""): Note {
+    const id = randomUUID();
+    const ts = now();
+    const b = cleanBody(body);
+    this.run("INSERT INTO notes(id,title,body,pinned,created,updated) VALUES(?,?,?,0,?,?)", id, noteTitle(b), b, ts, ts);
+    return this.getNote(id);
+  }
+  updateNote(id: string, n: Partial<Pick<Note, "body" | "pinned">>): Note {
+    const cur = this.getNote(id);
+    const body = n.body !== undefined ? cleanBody(n.body) : cur.body;
+    const pinned = n.pinned !== undefined ? !!n.pinned : cur.pinned;
+    if (body === cur.body && pinned === cur.pinned) return cur;
+    // pinning alone keeps the note's place in "recently edited"
+    this.run("UPDATE notes SET title=?, body=?, pinned=?, updated=? WHERE id=?", noteTitle(body), body, pinned ? 1 : 0,
+      body !== cur.body ? now() : cur.updated, id);
+    return this.getNote(id);
+  }
+  deleteNote(id: string) {
+    this.tx(() => {
+      const before = this.get("SELECT * FROM notes WHERE id=?", id);
+      if (!before) return;
+      this.run("DELETE FROM notes WHERE id=?", id);
+      this.journal(`Delete note "${String(before.title).slice(0, 60)}"`, "note", id, before, null);
+    });
+  }
+
   // ---- undo ----------------------------------------------------------------------------------
-  private journal(label: string, entity: "task" | "event", id: string, before: Row, after: Row | null) {
+  private journal(label: string, entity: "task" | "event" | "note", id: string, before: Row, after: Row | null) {
     this.run("INSERT INTO undo(label,entity,entity_id,before_json,after_json,created) VALUES(?,?,?,?,?,?)",
       label, entity, id, JSON.stringify(before), after ? JSON.stringify(after) : "", now());
     this.run(`DELETE FROM undo WHERE id NOT IN (SELECT id FROM undo ORDER BY id DESC LIMIT ${UNDO_KEEP})`);
@@ -256,7 +305,7 @@ export class Store {
     return this.tx(() => {
       const u = this.get("SELECT * FROM undo WHERE state='active' ORDER BY id DESC LIMIT 1");
       if (!u) return null;
-      const table = u.entity === "task" ? "tasks" : "events";
+      const table = u.entity === "task" ? "tasks" : u.entity === "note" ? "notes" : "events";
       const before = JSON.parse(String(u.before_json)) as Row;
       const current = this.get(`SELECT * FROM ${table} WHERE id=?`, String(u.entity_id));
       if (u.after_json) {

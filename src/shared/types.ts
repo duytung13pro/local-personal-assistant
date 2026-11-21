@@ -25,6 +25,15 @@ export interface CalEvent {
   updated: string;
 }
 
+export interface Note {
+  id: string;
+  title: string; // first heading or line of the body
+  body: string; // Markdown with LaTeX math
+  pinned: boolean;
+  created: string;
+  updated: string;
+}
+
 export interface UndoEntry {
   id: number;
   label: string;
@@ -137,6 +146,13 @@ export interface Api {
 
   latestUndo(): Promise<UndoEntry | null>;
   undo(): Promise<string | null>;
+
+  listNotes(): Promise<Note[]>;
+  createNote(body?: string): Promise<Note>;
+  updateNote(id: string, n: Partial<Pick<Note, "body" | "pinned">>): Promise<Note>;
+  deleteNote(id: string): Promise<void>; // undoable
+  exportNote(id: string, kind: "md" | "pdf"): Promise<string | null>; // saved path, or null if cancelled
+  openLink(url: string): Promise<void>; // http(s)/mailto links from a note open in the default browser
 
   listProjects(): Promise<Project[]>;
   createProject(title: string): Promise<Project>;

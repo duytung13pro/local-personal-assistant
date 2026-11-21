@@ -10,6 +10,13 @@ A Windows desktop app for your day (planner, calendar, checklist) with a built-i
 - **Planner** — three day columns of tasks plus an hourly schedule for the selected day.
 - **Calendar** — month grid with events and due tasks; side panel for the selected day.
 - **Checklist** — search (title and notes) with status / priority / due filters.
+- **Notes** — Markdown notes with LaTeX math, a CodeMirror editor and a live preview (Write / Split / Read).
+  Math is rendered by KaTeX: `$…$` and `\(…\)` inline, `$$…$$` and `\[…\]` display, and bare environments
+  (`\begin{align}`, `equation`, `gather`, `alignat`, `cases`, matrices, `CD`). Numbered environments count through
+  the whole note and support `\label` / `\eqref` / `\ref`; `\newcommand` carries to later formulas; `\ce{}` for
+  chemistry. Type `\` for LaTeX completions (Tab moves between blanks). Ctrl+B / Ctrl+I / Ctrl+K, Ctrl+M inline math,
+  Ctrl+Shift+M display math, Ctrl+F find. Tables, checklists, code blocks. Autosaves; pin notes; delete is undoable;
+  export to `.md` or PDF (same rendering). Copying rendered math copies its LaTeX. Notes never go to any AI model.
 - **AI Workspace → Chat** — talk to your **head chef** (local `qwen3:30b`). For each message it decides, in 1–3 s:
   answer itself (quick things) · use your **planner** (read/add/move/complete tasks and events, locally only; those replies
   never reach cloud models) · hand it to **one** model · or **split** it into sub-tasks that run in parallel and merge
@@ -32,7 +39,7 @@ A Windows desktop app for your day (planner, calendar, checklist) with a built-i
   3. **Review with ChatGPT** → ChatGPT checks the results and the files, and adds follow-up tasks if needed.
 - **Activity** — every agent run with its output. **Connections** — which workers are ready, model per worker,
   on/off switches, "Warm up models".
-- Undo (Ctrl+Z) for completing/reopening and deleting tasks and events. Ctrl+N new task, Ctrl+F search, Ctrl+1–6 views.
+- Undo (Ctrl+Z) for completing/reopening and deleting tasks and events. Ctrl+N new task, Ctrl+F search, Ctrl+1–7 views.
 
 ## The team
 
@@ -83,7 +90,7 @@ version's database, opened read-only.
 ## Stack
 
 Electron 45 (Node 24) · React 19 · TypeScript · Vite 8 · Tailwind CSS 4 · Motion · lucide icons ·
-SQLite via Electron's built-in `node:sqlite` (no native modules).
+SQLite via Electron's built-in `node:sqlite` (no native modules) · Notes: markdown-it, KaTeX, CodeMirror 6.
 
 ```
 src/main/        Electron main process
@@ -93,7 +100,7 @@ src/main/        Electron main process
   orchestrator.ts planner/reviewer prompts, plan parsing, dependency waves, fallback plan
   main.ts        window, IPC, the parallel scheduler
 src/renderer/    React UI (App shell, design system in ui.tsx, one file per view)
-src/shared/      types, workers, dates, filters (pure, tested)
+src/shared/      types, workers, dates, filters, markdown (Markdown + KaTeX for notes) — pure, tested
 tests/           node:test suite
 ```
 

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState, type ReactNode } from "react";
 import { AnimatePresence, motion } from "motion/react";
-import { Activity as ActivityIcon, Bot, CalendarDays, ChevronLeft, ChevronRight, LayoutGrid, ListChecks, PlugZap, Undo2, X } from "lucide-react";
+import { Activity as ActivityIcon, Bot, CalendarDays, ChevronLeft, ChevronRight, LayoutGrid, ListChecks, NotebookPen, PlugZap, Undo2, X } from "lucide-react";
 import { MONTHS, monthGrid, shiftMonth, today as todayIso } from "../shared/dates";
 import { api, cx, dismiss, undoLast, useData, useToasts } from "./lib";
 import { IconButton } from "./ui";
@@ -8,17 +8,19 @@ import { EventEditor, TaskEditor, type EventDraft, type TaskDraft } from "./edit
 import { Planner } from "./views/Planner";
 import { CalendarView } from "./views/Calendar";
 import { Checklist } from "./views/Checklist";
+import { Notes } from "./views/Notes";
 import { AIWorkspace } from "./views/AIWorkspace";
 import { ActivityView } from "./views/Activity";
 import { Connections } from "./views/Connections";
 
-export type View = "planner" | "calendar" | "checklist" | "ai" | "activity" | "connections";
+export type View = "planner" | "calendar" | "checklist" | "notes" | "ai" | "activity" | "connections";
 
 const NAV: { group: string; items: { id: View; label: string; icon: ReactNode }[] }[] = [
   { group: "Planning", items: [
     { id: "planner", label: "Planner", icon: <LayoutGrid size={16} /> },
     { id: "calendar", label: "Calendar", icon: <CalendarDays size={16} /> },
     { id: "checklist", label: "Checklist", icon: <ListChecks size={16} /> },
+    { id: "notes", label: "Notes", icon: <NotebookPen size={16} /> },
   ] },
   { group: "Assistant", items: [
     { id: "ai", label: "AI Workspace", icon: <Bot size={16} /> },
@@ -57,12 +59,13 @@ export default function App() {
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       const typing = (e.target as HTMLElement).closest("input,textarea,select,[contenteditable]");
-      if (!e.ctrlKey || e.altKey) return;
+      if (!e.ctrlKey || e.altKey || e.defaultPrevented) return; // the notes editor handles its own Ctrl+F, Ctrl+Z…
       const k = e.key.toLowerCase();
       if (k === "n") { e.preventDefault(); setTaskDraft({ due: view === "planner" || view === "calendar" ? focusDate : "" }); }
+      else if (k === "f" && (e.target as HTMLElement).closest(".cm-editor")) return; // find inside the note
       else if (k === "f") { e.preventDefault(); setView("checklist"); setSearchSignal((n) => n + 1); }
       else if (k === "z" && !typing && !document.querySelector("[role=dialog]")) { e.preventDefault(); void undoLast(); }
-      else if (/^[1-6]$/.test(k)) { e.preventDefault(); setView(NAV.flatMap((g) => g.items)[Number(k) - 1].id); }
+      else if (/^[1-7]$/.test(k)) { e.preventDefault(); setView(NAV.flatMap((g) => g.items)[Number(k) - 1].id); }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
@@ -92,7 +95,7 @@ export default function App() {
             </div>
           ))}
         </nav>
-        <p className="mt-auto px-2.5 pt-4 text-[11.5px] leading-snug text-faint">Tasks and calendar stay local.<br />Ctrl+1–6 switch views.</p>
+        <p className="mt-auto px-2.5 pt-4 text-[11.5px] leading-snug text-faint">Tasks and calendar stay local.<br />Ctrl+1–7 switch views.</p>
       </aside>
 
       {/* Views stay mounted (hidden when inactive) so switching is instant and keeps scroll, drafts and search. */}
@@ -100,6 +103,7 @@ export default function App() {
         <Pane on={view === "planner"}><Planner ctx={ctx} /></Pane>
         <Pane on={view === "calendar"}><CalendarView ctx={ctx} /></Pane>
         <Pane on={view === "checklist"}><Checklist ctx={ctx} /></Pane>
+        <Pane on={view === "notes"}><Notes /></Pane>
         <Pane on={view === "ai"}><AIWorkspace /></Pane>
         <Pane on={view === "activity"}><ActivityView active={view === "activity"} /></Pane>
         <Pane on={view === "connections"}><Connections active={view === "connections"} /></Pane>
