@@ -224,12 +224,36 @@ const md = MarkdownItFactory({ html: false, linkify: true, typographer: false, b
 /** Render a note to HTML. Raw HTML in the note is shown as text (never executed). */
 export function renderNote(src: string): string {
   const env: Env = { labels: new Map(), count: 0, macros: {} };
-  return md.render(src, env);
+  return md.render(hideFrontMatter(src), env);
 }
+
+/** YAML front matter (Obsidian and most Markdown tools) at the very top of a note, or "" when there is none. */
+const FRONT = /^---[ \t]*\r?\n[\s\S]*?\r?\n---[ \t]*(?:\r?\n|$)/;
+const frontMatter = (src: string) => FRONT.exec(src)?.[0] ?? "";
+/** Blank the front matter out instead of cutting it, so data-line numbers still match the editor. */
+const hideFrontMatter = (src: string) => {
+  const fm = frontMatter(src);
+  return fm ? "\n".repeat(fm.split("\n").length - 1) + src.slice(fm.length) : src;
+};
 
 /** Title shown in the list: the first heading or first non-empty line. */
 export function noteTitle(body: string): string {
-  const line = body.split(/\r?\n/).map((l) => l.trim()).find((l) => l && !/^(\$\$|\\\[|```|---)/.test(l)) ?? "";
+  const line = body.slice(frontMatter(body).length).split(/\r?\n/).map((l) => l.trim())
+    .find((l) => l && !/^(\$\$|\\\[|```|---)/.test(l)) ?? "";
   const t = line.replace(/^#{1,6}\s+/, "").replace(/[*_`~]/g, "").replace(/\$([^$]*)\$/g, "$1").trim();
   return (t || "Untitled").slice(0, 120);
+}
+
+/**
+ * Body for a note imported from a .md file. Many tools (Obsidian among them) use the file name as the title,
+ * so when the file does not start with a heading, the file name goes in as one, after any front matter.
+ */
+export function importedBody(text: string, fileName: string): string {
+  const src = text.replace(/^﻿/, "").replace(/\r\n?/g, "\n");
+  const fm = frontMatter(src);
+  const rest = src.slice(fm.length);
+  if (/^\s*#{1,6}\s+\S/.test(rest)) return src;
+  const name = fileName.replace(/\.(md|markdown|mdown|txt)$/i, "").trim();
+  if (!name) return src;
+  return `${fm}# ${name}\n\n${rest.replace(/^\s*\n/, "")}`;
 }

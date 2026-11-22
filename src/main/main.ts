@@ -2,9 +2,9 @@
 import { app, BrowserWindow, dialog, ipcMain, shell, screen } from "electron";
 import { existsSync, mkdirSync, readFileSync, writeFileSync, renameSync, rmSync } from "node:fs";
 import { pathToFileURL } from "node:url";
-import { renderNote } from "../shared/markdown";
+import { importedBody, renderNote } from "../shared/markdown";
 import { readdir, readFile as readFileAsync, stat } from "node:fs/promises";
-import { join, resolve, relative, sep } from "node:path";
+import { basename, join, resolve, relative, sep } from "node:path";
 import { Store, ValidationError } from "./db";
 import { AgentError, KEEP_ALIVE, NUM_CTX, agentStatuses, ollamaChat, ollamaPost, ollamaStream, runClaude, runClaudeChat, runCodex, runCodexEdit } from "./providers";
 import { RECENT, SUMMARY_SYSTEM, cleanSummary, contextText, mergePrompt, parseRoute, parseTeam, routerPrompt, runPlanner, selfSystem, workerPrompt, type Route } from "./chat";
@@ -73,7 +73,8 @@ handle("listNotes", () => store.listNotes());
 handle("createNote", (body) => store.createNote(body), "notes");
 handle("updateNote", (id, n) => store.updateNote(id, n), "notes");
 handle("deleteNote", (id) => store.deleteNote(id), "notes");
-handle("exportNote", (id, kind) => exportNote(store.getNote(id), kind === "pdf" ? "pdf" : "md"));
+handle("importNotes", () => importNotes(), "notes");
+handle("exportNote", (id, kind) =>exportNote(store.getNote(id), kind === "pdf" ? "pdf" : "md"));
 handle("openLink", async (url) => {
   const u = String(url);
   if (!/^(https?:|mailto:)/i.test(u)) throw new ValidationError("Only web and mailto links can be opened.");
@@ -582,6 +583,29 @@ async function exportNote(note: { title: string; body: string }, kind: "md" | "p
     pdfWin.destroy();
     rmSync(tmp, { force: true });
   }
+}
+
+/** Pick .md files and turn each into a note. Files that can't be read or are too long are skipped and reported. */
+async function importNotes(): Promise<{ ids: string[]; skipped: string[] }> {
+  const res = await dialog.showOpenDialog(win!, {
+    title: "Import Markdown notes",
+    properties: ["openFile", "multiSelections"],
+    filters: [{ name: "Markdown", extensions: ["md", "markdown", "mdown", "txt"] }, { name: "All files", extensions: ["*"] }],
+  });
+  const ids: string[] = [];
+  const skipped: string[] = [];
+  if (res.canceled) return { ids, skipped };
+  for (const file of res.filePaths) {
+    const name = basename(file);
+    try {
+      const info = await stat(file);
+      if (!info.isFile() || info.size > 8_000_000) throw new Error("too big");
+      ids.push(store.createNote(importedBody(await readFileAsync(file, "utf8"), name)).id);
+    } catch {
+      skipped.push(name);
+    }
+  }
+  return { ids, skipped };
 }
 
 // ---- window ------------------------------------------------------------------------------------

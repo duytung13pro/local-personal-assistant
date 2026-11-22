@@ -2,7 +2,7 @@
 import { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState, type MouseEvent, type ReactNode } from "react";
 import { EditorView } from "@codemirror/view";
 import { EditorState } from "@codemirror/state";
-import { Bold, Code, Columns2, Eye, FileDown, FileText, Heading, Italic, Link, List, ListChecks, NotebookPen, PanelRightClose, PanelRightOpen, PenLine,
+import { Bold, Code, Columns2, Eye, FileDown, FileUp,FileText, Heading, Italic, Link, List, ListChecks, NotebookPen, PanelRightClose, PanelRightOpen, PenLine,
   Pin, PinOff, Plus, Quote, Search, Sigma, Table, Trash2 } from "lucide-react";
 import "katex/dist/katex.min.css";
 import "katex/contrib/copy-tex"; // copying rendered math copies its LaTeX source
@@ -81,6 +81,15 @@ export function Notes() {
     let made: Note | undefined;
     if (await attempt(async () => { made = await api.createNote(body); })) { setSelected(made!.id); setQuery(""); }
   };
+  const importFiles = async () => {
+    let res: { ids: string[]; skipped: string[] } | undefined;
+    if (!(await attempt(async () => { res = await api.importNotes(); })) || !res) return;
+    const { ids, skipped } = res;
+    if (ids.length) { setSelected(ids[ids.length - 1]); setQuery(""); }
+    const done = ids.length ? `Imported ${ids.length} note${ids.length === 1 ? "" : "s"}.` : "";
+    if (skipped.length) toast.error(`${done} Couldn't import ${skipped.slice(0, 3).join(", ")}${skipped.length > 3 ? ` and ${skipped.length - 3} more` : ""}.`.trim());
+    else if (ids.length > 1) toast.info(done);
+  };
 
   return (
     <div className={cx("grid h-full", showList ? "grid-cols-[1fr_268px]" : "grid-cols-[1fr]")}>
@@ -95,6 +104,7 @@ export function Notes() {
                 numbered equations with \eqref, and \newcommand. Notes stay on this computer.</p>
               <div className="mt-4 flex justify-center gap-2">
                 <Button variant="primary" icon={<Plus size={15} />} onClick={() => void create()}>New note</Button>
+                <Button icon={<FileUp size={15} />} onClick={() => void importFiles()}>Import .md</Button>
                 <Button onClick={() => void create(SAMPLE)}>Open a sample</Button>
               </div>
             </div>
@@ -104,7 +114,8 @@ export function Notes() {
       <aside hidden={!showList} className="flex min-h-0 flex-col border-l border-line bg-[#fafaf8]">
         <header className="flex items-center gap-2 px-4 pt-4 pb-3">
           <h1 className="text-[22px] font-semibold">Notes</h1>
-          <Button variant="primary" size="sm" className="ml-auto" icon={<Plus size={14} />} onClick={() => void create()}>New</Button>
+          <IconButton label="Import Markdown files" className="ml-auto" onClick={() => void importFiles()}><FileUp size={15} /></IconButton>
+          <Button variant="primary" size="sm" icon={<Plus size={14} />} onClick={() => void create()}>New</Button>
         </header>
         <div className="relative px-3 pb-2">
           <Search size={14} className="pointer-events-none absolute top-1/2 left-6 -translate-y-1/2 text-faint" />

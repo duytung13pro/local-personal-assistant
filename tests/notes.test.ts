@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { noteTitle, numberMath, renderNote } from "../src/shared/markdown";
+import { importedBody, noteTitle, numberMath, renderNote } from "../src/shared/markdown";
 
 const count = (s: string, re: RegExp) => (s.match(re) ?? []).length;
 
@@ -55,6 +55,18 @@ test("tables, task lists, chemistry, title", () => {
   assert.ok(!h.includes("math-error"));
   assert.equal(noteTitle("\n\n## Lecture 3: *Fourier*  \nbody"), "Lecture 3: Fourier");
   assert.equal(noteTitle("  \n"), "Untitled");
+});
+
+test("imported files: file name becomes the title, front matter is kept but not shown", () => {
+  assert.equal(importedBody("﻿Some text\r\nmore", "Lecture 4.md"), "# Lecture 4\n\nSome text\nmore");
+  assert.equal(importedBody("# Own title\nbody", "file.md"), "# Own title\nbody");
+  const fm = "---\ntags: [math]\ntitle: x\n---\n\nBody $x$";
+  const b = importedBody(fm, "Fourier.markdown");
+  assert.equal(b, "---\ntags: [math]\ntitle: x\n---\n# Fourier\n\nBody $x$");
+  assert.equal(noteTitle(b), "Fourier");
+  const h = renderNote(b);
+  assert.ok(!h.includes("tags") && !h.includes("<hr") && h.includes('data-line="4"'), h);
+  assert.equal(noteTitle("---\ntitle: x\n---\nFirst line"), "First line");
 });
 
 test("store: notes save, pin, sort and come back with undo after delete", async () => {

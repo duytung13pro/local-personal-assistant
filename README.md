@@ -16,7 +16,8 @@ A Windows desktop app for your day (planner, calendar, checklist) with a built-i
   the whole note and support `\label` / `\eqref` / `\ref`; `\newcommand` carries to later formulas; `\ce{}` for
   chemistry. Type `\` for LaTeX completions (Tab moves between blanks). Ctrl+B / Ctrl+I / Ctrl+K, Ctrl+M inline math,
   Ctrl+Shift+M display math, Ctrl+F find. Tables, checklists, code blocks. Autosaves; pin notes; delete is undoable;
-  export to `.md` or PDF (same rendering). Copying rendered math copies its LaTeX. Notes never go to any AI model.
+  import `.md` files (several at once; a file with no heading gets its file name as the title, YAML front matter is
+  kept but hidden), export to `.md` or PDF (same rendering). Copying rendered math copies its LaTeX. Notes never go to any AI model.
 - **AI Workspace → Chat** — talk to your **head chef** (local `qwen3:30b`). For each message it decides, in 1–3 s:
   answer itself (quick things) · use your **planner** (read/add/move/complete tasks and events, locally only; those replies
   never reach cloud models) · hand it to **one** model · or **split** it into sub-tasks that run in parallel and merge
