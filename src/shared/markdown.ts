@@ -187,7 +187,7 @@ function mathPlugin(md: MarkdownIt) {
   md.renderer.rules.math = (toks, i, _o, env) => renderMath(toks[i].content, !!toks[i].meta?.display, env as unknown as Env);
   md.renderer.rules.math_block = (toks, i, _o, env) => {
     const t = toks[i];
-    const line = t.map ? ` data-line="${t.map[0]}"` : "";
+    const line = t.map ? ` data-line="${t.map[0]}" data-end="${t.map[1]}"` : "";
     return `<div class="math-block"${line}>${renderMath(t.content, true, env as unknown as Env)}</div>\n`;
   };
 }
@@ -214,7 +214,12 @@ function taskLists(md: MarkdownIt) {
 /** Source line numbers on top-level blocks, so the preview can follow the editor's scroll position. */
 function lineAttrs(md: MarkdownIt) {
   md.core.ruler.push("line_attrs", (state: StateCore) => {
-    for (const t of state.tokens) if (t.map && t.nesting === 1 && t.level === 0) t.attrSet("data-line", String(t.map[0]));
+    for (const t of state.tokens) {
+      // openings (paragraph, list, table…) and self-contained blocks (code fence, rule); data-end is the line after the block
+      if (!t.map || t.level !== 0 || !t.block || t.nesting === -1 || t.type === "inline") continue;
+      t.attrSet("data-line", String(t.map[0]));
+      t.attrSet("data-end", String(t.map[1]));
+    }
   });
 }
 

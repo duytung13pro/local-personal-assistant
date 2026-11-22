@@ -1,5 +1,5 @@
 // Notes: Markdown + LaTeX notes with a CodeMirror editor and a live KaTeX preview. Everything stays local.
-import { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState, type MouseEvent, type ReactNode } from "react";
+import { useCallback, useDeferredValue, useEffect, useLayoutEffect, useMemo, useRef, useState, type MouseEvent, type ReactNode } from "react";
 import { EditorView } from "@codemirror/view";
 import { EditorState } from "@codemirror/state";
 import { Bold, Code, Columns2, Eye, FileDown, FileUp,FileText, Heading, Italic, Link, List, ListChecks, NotebookPen, PanelRightClose, PanelRightOpen, PenLine,
@@ -92,7 +92,7 @@ export function Notes() {
   };
 
   return (
-    <div className={cx("grid h-full", showList ? "grid-cols-[1fr_268px]" : "grid-cols-[1fr]")}>
+    <div className={cx("grid h-full grid-rows-[minmax(0,1fr)]", showList ? "grid-cols-[1fr_268px]" : "grid-cols-[1fr]")}>
       {current ? <NoteEditor key={current.id} note={current} mode={mode} setMode={setMode}
         listOpen={listOpen} toggleList={toggleList} onNew={() => void create()} />
         : !notes ? <div /> : (
@@ -153,6 +153,8 @@ function NoteEditor({ note, mode, setMode, listOpen, toggleList, onNew }: {
   const [saving, setSaving] = useState<"saved" | "saving" | "error">("saved");
   const pending = useRef<string | null>(null);
   const timer = useRef<ReturnType<typeof setTimeout>>(undefined);
+  const centerLine = useRef<number | null>(null); // 0-based source line of the latest edit, until the preview centers on it
+  const lastEdit = useRef(0);
 
   const flush = useCallback(async () => {
     clearTimeout(timer.current);
@@ -174,6 +176,8 @@ function NoteEditor({ note, mode, setMode, listOpen, toggleList, onNew }: {
     const v = new EditorView({
       parent: host.current!,
       state: EditorState.create({ doc: note.body, extensions: noteExtensions((doc) => {
+        const cur = view.current;
+        if (cur) { centerLine.current = cur.state.doc.lineAt(cur.state.selection.main.head).number - 1; lastEdit.current = Date.now(); }
         setBody(doc);
         pending.current = doc;
         setSaving("saving");
@@ -196,15 +200,22 @@ function NoteEditor({ note, mode, setMode, listOpen, toggleList, onNew }: {
   const shownBody = useDeferredValue(body);
   const html = useMemo(() => renderNote(shownBody), [shownBody]);
 
-  /** Scroll the preview so the block for the editor's top line sits at its top. */
+  /** Scroll the preview so the editor's top line sits at its top (when you scroll the editor). */
   const syncPreview = (line: number) => {
     const box = preview.current;
-    if (!box || box.hidden) return;
-    const els = [...box.querySelectorAll<HTMLElement>("[data-line]")];
-    let best: HTMLElement | null = null;
-    for (const el of els) { if (Number(el.dataset.line) <= line) best = el; else break; }
-    box.scrollTop = best ? best.offsetTop - box.offsetTop - 12 : 0;
+    if (!box || box.hidden || Date.now() - lastEdit.current < 400) return; // while typing, the edit point wins
+    const y = previewY(box, line);
+    box.scrollTop = y === null ? 0 : y - 12;
   };
+
+  // After an edit, center the preview on the edited spot once it shows the new text.
+  useLayoutEffect(() => {
+    const box = preview.current;
+    if (centerLine.current === null || shownBody !== body || !box || box.hidden) return;
+    const y = previewY(box, centerLine.current);
+    centerLine.current = null;
+    if (y !== null) box.scrollTop = y - box.clientHeight / 2;
+  }, [html, shownBody, body]);
 
   const act = (fn: (v: EditorView) => unknown) => () => { if (view.current) fn(view.current); };
   const togglePin = () => void attempt(() => api.updateNote(note.id, { pinned: !note.pinned }));
@@ -228,7 +239,7 @@ function NoteEditor({ note, mode, setMode, listOpen, toggleList, onNew }: {
   };
 
   return (
-    <div className="flex min-w-0 flex-col">
+    <div className="flex min-h-0 min-w-0 flex-col">
       <div className="flex h-12 shrink-0 items-center gap-0.5 border-b border-line bg-panel px-3">
         <Tool label="Heading (toggle)" onClick={act((v) => prefix(v, "## "))}><Heading size={15} /></Tool>
         <Tool label="Bold (Ctrl+B)" onClick={act((v) => wrap(v, "**", "**", "bold"))}><Bold size={15} /></Tool>
@@ -266,16 +277,31 @@ function NoteEditor({ note, mode, setMode, listOpen, toggleList, onNew }: {
           {listOpen ? <PanelRightClose size={15} /> : <PanelRightOpen size={15} />}</IconButton>
       </div>
 
-      <div className={cx("grid min-h-0 flex-1", mode === "split" ? "grid-cols-2" : "grid-cols-1")}>
-        <div ref={host} hidden={mode === "read"} className={cx("min-h-0 overflow-hidden bg-panel", mode === "split" && "border-r border-line")} />
+      <div className={cx("grid min-h-0 flex-1 grid-rows-[minmax(0,1fr)]", mode === "split" ? "grid-cols-2" : "grid-cols-1")}>
+        <div ref={host} hidden={mode === "read"} className={cx("note-scroll min-h-0 overflow-hidden bg-panel", mode === "split" && "border-r border-line")} />
         <div ref={preview} hidden={mode === "write"} onClick={onPreviewClick} data-selectable
-          className="relative min-h-0 overflow-y-auto bg-bg px-8 pt-6 pb-[30vh]">
+          className="note-scroll relative min-h-0 overflow-y-auto bg-bg px-8 pt-6 pb-[50vh]">
           {shownBody.trim() ? <article className="note-prose" dangerouslySetInnerHTML={{ __html: html }} />
             : <p className="note-prose text-faint">Nothing to preview yet.</p>}
         </div>
       </div>
     </div>
   );
+}
+
+/**
+ * Where 0-based source line `line` appears in the preview, in px from the top of its scroll content:
+ * the top of the block holding that line, plus how far into the block the line is.
+ */
+function previewY(box: HTMLElement, line: number): number | null {
+  let best: HTMLElement | null = null;
+  for (const el of box.querySelectorAll<HTMLElement>("[data-line]")) { if (Number(el.dataset.line) <= line) best = el; else break; }
+  if (!best) return null;
+  const top = best.getBoundingClientRect().top - box.getBoundingClientRect().top + box.scrollTop;
+  const start = Number(best.dataset.line);
+  const end = Number(best.dataset.end ?? start + 1);
+  const frac = Math.min(1, Math.max(0, (line - start) / Math.max(1, end - start)));
+  return top + frac * best.offsetHeight;
 }
 
 function Tool({ label, onClick, children }: { label: string; onClick: () => void; children: ReactNode }) {
