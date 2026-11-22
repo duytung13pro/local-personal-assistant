@@ -1,5 +1,5 @@
 // Notes: Markdown + LaTeX notes with a CodeMirror editor and a live KaTeX preview. Everything stays local.
-import { useCallback, useDeferredValue, useEffect, useLayoutEffect, useMemo, useRef, useState, type MouseEvent, type ReactNode } from "react";
+import { useCallback, useDeferredValue, useEffect, useLayoutEffect, useMemo, useRef, useState, type DragEvent, type MouseEvent, type ReactNode } from "react";
 import { EditorView } from "@codemirror/view";
 import { EditorState } from "@codemirror/state";
 import { Bold, Code, Columns2, Eye, FileDown, FileUp,FileText, Heading, Italic, Link, List, ListChecks, NotebookPen, PanelRightClose, PanelRightOpen, PenLine,
@@ -16,6 +16,8 @@ import { block, noteExtensions, prefix, topLine, wrap } from "../noteEditor";
 
 type Mode = "write" | "split" | "read";
 const SAVE_MS = 500;
+type Imported = { ids: string[]; skipped: string[] };
+const DROPPABLE = /\.(md|markdown|mdown|txt)$/i;
 
 const SAMPLE = String.raw`# Welcome to Notes
 
@@ -68,8 +70,13 @@ export function Notes() {
   const list = notes ?? [];
   const current = list.find((n) => n.id === selected) ?? null;
   const showList = listOpen || !current; // with no note open, the list is the page
+  const fresh = useRef<string | null>(null); // a note just created here that the list may not have caught up with yet
+  const open = (id: string) => { fresh.current = id; setSelected(id); setQuery(""); };
   useEffect(() => { // keep a valid selection: first note when nothing (or a deleted note) is selected
-    if (notes && (!selected || !notes.some((n) => n.id === selected))) setSelected(notes[0]?.id ?? null);
+    if (!notes) return;
+    if (selected && notes.some((n) => n.id === selected)) { if (fresh.current === selected) fresh.current = null; return; }
+    if (selected && fresh.current === selected) return; // wait for the refreshed list
+    setSelected(notes[0]?.id ?? null);
   }, [notes, selected]);
 
   const shown = useMemo(() => {
@@ -79,20 +86,51 @@ export function Notes() {
 
   const create = async (body = "") => {
     let made: Note | undefined;
-    if (await attempt(async () => { made = await api.createNote(body); })) { setSelected(made!.id); setQuery(""); }
+    if (await attempt(async () => { made = await api.createNote(body); })) open(made!.id);
   };
-  const importFiles = async () => {
-    let res: { ids: string[]; skipped: string[] } | undefined;
-    if (!(await attempt(async () => { res = await api.importNotes(); })) || !res) return;
+  const importFiles = (pick: () => Promise<Imported>) => async () => {
+    let res: Imported | undefined;
+    if (!(await attempt(async () => { res = await pick(); })) || !res) return;
     const { ids, skipped } = res;
-    if (ids.length) { setSelected(ids[ids.length - 1]); setQuery(""); }
+    if (ids.length) open(ids[ids.length - 1]);
     const done = ids.length ? `Imported ${ids.length} note${ids.length === 1 ? "" : "s"}.` : "";
     if (skipped.length) toast.error(`${done} Couldn't import ${skipped.slice(0, 3).join(", ")}${skipped.length > 3 ? ` and ${skipped.length - 3} more` : ""}.`.trim());
     else if (ids.length > 1) toast.info(done);
   };
+  const pickFiles = importFiles(() => api.importNotes());
+
+  // Drop .md files anywhere on the Notes view (editor included) to add each as a new note.
+  const [dragging, setDragging] = useState(false);
+  const depth = useRef(0);
+  const hasFiles = (e: DragEvent) => e.dataTransfer.types.includes("Files");
+  const onDragEnter = (e: DragEvent) => { if (!hasFiles(e)) return; e.preventDefault(); depth.current++; setDragging(true); };
+  const onDragLeave = (e: DragEvent) => { if (!hasFiles(e)) return; if (--depth.current <= 0) { depth.current = 0; setDragging(false); } };
+  const onDragOver = (e: DragEvent) => { if (!hasFiles(e)) return; e.preventDefault(); e.stopPropagation(); e.dataTransfer.dropEffect = "copy"; };
+  const onDrop = (e: DragEvent) => {
+    if (!hasFiles(e)) return;
+    e.preventDefault();
+    e.stopPropagation(); // keep the editor from pasting the file into the open note
+    depth.current = 0;
+    setDragging(false);
+    const files = [...e.dataTransfer.files];
+    void importFiles(() => Promise.all(files.map(async (f) => ({
+      name: f.name,
+      text: DROPPABLE.test(f.name) && f.size <= 8_000_000 ? await f.text() : "", // others are reported as skipped
+    }))).then((list) => api.importNoteTexts(list)))();
+  };
 
   return (
-    <div className={cx("grid h-full grid-rows-[minmax(0,1fr)]", showList ? "grid-cols-[1fr_268px]" : "grid-cols-[1fr]")}>
+    <div className={cx("relative grid h-full grid-rows-[minmax(0,1fr)]", showList ? "grid-cols-[1fr_268px]" : "grid-cols-[1fr]")}
+      onDragEnterCapture={onDragEnter} onDragLeaveCapture={onDragLeave} onDragOverCapture={onDragOver} onDropCapture={onDrop}>
+      {dragging && (
+        <div className="pointer-events-none absolute inset-2 z-20 grid place-items-center rounded-xl border-2 border-dashed border-accent bg-[rgba(250,250,248,0.92)]">
+          <div className="text-center">
+            <FileUp size={26} className="mx-auto text-accent-ink" />
+            <p className="mt-2 text-[15px] font-semibold">Drop to add as new notes</p>
+            <p className="mt-0.5 text-[13px] text-muted">.md, .markdown or .txt — one note per file</p>
+          </div>
+        </div>
+      )}
       {current ? <NoteEditor key={current.id} note={current} mode={mode} setMode={setMode}
         listOpen={listOpen} toggleList={toggleList} onNew={() => void create()} />
         : !notes ? <div /> : (
@@ -104,7 +142,7 @@ export function Notes() {
                 numbered equations with \eqref, and \newcommand. Notes stay on this computer.</p>
               <div className="mt-4 flex justify-center gap-2">
                 <Button variant="primary" icon={<Plus size={15} />} onClick={() => void create()}>New note</Button>
-                <Button icon={<FileUp size={15} />} onClick={() => void importFiles()}>Import .md</Button>
+                <Button icon={<FileUp size={15} />} onClick={() => void pickFiles()}>Import .md</Button>
                 <Button onClick={() => void create(SAMPLE)}>Open a sample</Button>
               </div>
             </div>
@@ -114,7 +152,7 @@ export function Notes() {
       <aside hidden={!showList} className="flex min-h-0 flex-col border-l border-line bg-[#fafaf8]">
         <header className="flex items-center gap-2 px-4 pt-4 pb-3">
           <h1 className="text-[22px] font-semibold">Notes</h1>
-          <IconButton label="Import Markdown files" className="ml-auto" onClick={() => void importFiles()}><FileUp size={15} /></IconButton>
+          <IconButton label="Import Markdown files" className="ml-auto" onClick={() => void pickFiles()}><FileUp size={15} /></IconButton>
           <Button variant="primary" size="sm" icon={<Plus size={14} />} onClick={() => void create()}>New</Button>
         </header>
         <div className="relative px-3 pb-2">

@@ -74,6 +74,7 @@ handle("createNote", (body) => store.createNote(body), "notes");
 handle("updateNote", (id, n) => store.updateNote(id, n), "notes");
 handle("deleteNote", (id) => store.deleteNote(id), "notes");
 handle("importNotes", () => importNotes(), "notes");
+handle("importNoteTexts", (files) => importNoteTexts(files), "notes");
 handle("exportNote", (id, kind) =>exportNote(store.getNote(id), kind === "pdf" ? "pdf" : "md"));
 handle("openLink", async (url) => {
   const u = String(url);
@@ -599,8 +600,26 @@ async function importNotes(): Promise<{ ids: string[]; skipped: string[] }> {
     const name = basename(file);
     try {
       const info = await stat(file);
-      if (!info.isFile() || info.size > 8_000_000) throw new Error("too big");
+      if (!info.isFile() || info.size > IMPORT_MAX) throw new Error("too big");
       ids.push(store.createNote(importedBody(await readFileAsync(file, "utf8"), name)).id);
+    } catch {
+      skipped.push(name);
+    }
+  }
+  return { ids, skipped };
+}
+const IMPORT_MAX = 8_000_000;
+const IMPORTABLE = /\.(md|markdown|mdown|txt)$/i;
+
+/** Files dropped on the Notes view: the renderer reads their text, each becomes a note. Non-Markdown files are skipped. */
+function importNoteTexts(files: unknown): { ids: string[]; skipped: string[] } {
+  const ids: string[] = [];
+  const skipped: string[] = [];
+  for (const f of Array.isArray(files) ? files.slice(0, 200) : []) {
+    const name = basename(String(f?.name ?? "")) || "file";
+    try {
+      if (!IMPORTABLE.test(name) || typeof f.text !== "string" || f.text.length > IMPORT_MAX) throw new Error("skip");
+      ids.push(store.createNote(importedBody(f.text, name)).id);
     } catch {
       skipped.push(name);
     }

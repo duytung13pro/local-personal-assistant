@@ -152,6 +152,7 @@ export interface Api {
   updateNote(id: string, n: Partial<Pick<Note, "body" | "pinned">>): Promise<Note>;
   deleteNote(id: string): Promise<void>; // undoable
   importNotes(): Promise<{ ids: string[]; skipped: string[] }>; // new note ids, and file names that could not be imported
+  importNoteTexts(files: { name: string; text: string }[]): Promise<{ ids: string[]; skipped: string[] }>; // dropped files
   exportNote(id: string, kind: "md" | "pdf"): Promise<string | null>; // saved path, or null if cancelled
   openLink(url: string): Promise<void>; // http(s)/mailto links from a note open in the default browser
 
